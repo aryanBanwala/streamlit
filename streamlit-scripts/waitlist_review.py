@@ -87,7 +87,7 @@ def fetch_all_waitlist_users():
         res = supabase.table('waitlist_metadata').select(
             'user_id, full_name, whatsapp_number, gender, city, area, '
             'relationship_type, relationship_why, interesting_fact, '
-            'additional_context, should_be_removed, created_at, qualified, professional_tier'
+            'additional_context, should_be_removed, created_at, qualified, professional_tier, linkedin_url'
         ).order('created_at', desc=True).execute()
         return res.data if res.data else []
     except Exception as e:
@@ -292,6 +292,11 @@ else:
 
             # Additional info
             st.markdown("**Additional Info**")
+            linkedin = user.get('linkedin_url')
+            if linkedin:
+                st.markdown(f"**LinkedIn:** [{linkedin}]({linkedin})")
+            else:
+                st.markdown("**LinkedIn:** N/A")
             st.markdown(f"**Interesting Fact:** {user.get('interesting_fact') or 'N/A'}")
             st.markdown(f"**Additional Context:** {user.get('additional_context') or 'N/A'}")
 
