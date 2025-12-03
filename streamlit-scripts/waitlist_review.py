@@ -165,6 +165,15 @@ status_filter = st.sidebar.radio(
     label_visibility="collapsed"
 )
 
+# Tier filter
+st.sidebar.subheader("Professional Tier")
+tier_filter = st.sidebar.radio(
+    "Select tier",
+    ["All", "1", "2", "3", "Not Set"],
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
 # --- Apply Filters ---
 filtered_users = all_users.copy()
 
@@ -179,6 +188,16 @@ if status_filter == "Not Removed":
     filtered_users = [u for u in filtered_users if u.get('should_be_removed') != True]
 elif status_filter == "Removed":
     filtered_users = [u for u in filtered_users if u.get('should_be_removed') == True]
+
+# Apply tier filter
+if tier_filter == "1":
+    filtered_users = [u for u in filtered_users if u.get('professional_tier') == 1]
+elif tier_filter == "2":
+    filtered_users = [u for u in filtered_users if u.get('professional_tier') == 2]
+elif tier_filter == "3":
+    filtered_users = [u for u in filtered_users if u.get('professional_tier') == 3]
+elif tier_filter == "Not Set":
+    filtered_users = [u for u in filtered_users if u.get('professional_tier') is None]
 
 # --- Pagination ---
 st.sidebar.divider()
