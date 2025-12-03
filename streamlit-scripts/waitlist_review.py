@@ -148,19 +148,37 @@ st.sidebar.divider()
 st.sidebar.header("Filters")
 
 # Gender filter
+st.sidebar.subheader("Gender")
 gender_filter = st.sidebar.radio(
-    "Gender",
-    ["All", "Females only", "Males only"],
-    horizontal=True
+    "Select gender",
+    ["All", "Females", "Males"],
+    horizontal=True,
+    label_visibility="collapsed"
+)
+
+# Status filter
+st.sidebar.subheader("Removal Status")
+status_filter = st.sidebar.radio(
+    "Select status",
+    ["All", "Not Removed", "Removed"],
+    horizontal=True,
+    label_visibility="collapsed"
 )
 
 # --- Apply Filters ---
 filtered_users = all_users.copy()
 
-if gender_filter == "Females only":
+# Apply gender filter
+if gender_filter == "Females":
     filtered_users = [u for u in filtered_users if u.get('gender', '').lower() == 'female']
-elif gender_filter == "Males only":
+elif gender_filter == "Males":
     filtered_users = [u for u in filtered_users if u.get('gender', '').lower() == 'male']
+
+# Apply status filter
+if status_filter == "Not Removed":
+    filtered_users = [u for u in filtered_users if u.get('should_be_removed') != True]
+elif status_filter == "Removed":
+    filtered_users = [u for u in filtered_users if u.get('should_be_removed') == True]
 
 # --- Pagination ---
 st.sidebar.divider()
