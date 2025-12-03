@@ -271,6 +271,18 @@ else:
                 st.markdown(f"- **City:** {user.get('city') or 'N/A'}")
                 st.markdown(f"- **Area:** {user.get('area') or 'N/A'}")
 
+                # LinkedIn
+                linkedin = user.get('linkedin_url')
+                if linkedin:
+                    lin_col1, lin_col2 = st.columns([1, 1])
+                    with lin_col1:
+                        st.link_button("LINKEDIN", linkedin)
+                    with lin_col2:
+                        if st.button("📋 Copy", key=f"copy_linkedin_{user_id}"):
+                            st.code(linkedin, language=None)
+                else:
+                    st.markdown("- **LinkedIn:** Not available")
+
             with col2:
                 st.markdown("**Status**")
                 tier = user.get('professional_tier')
@@ -292,11 +304,6 @@ else:
 
             # Additional info
             st.markdown("**Additional Info**")
-            linkedin = user.get('linkedin_url')
-            if linkedin:
-                st.markdown(f"**LinkedIn:** [{linkedin}]({linkedin})")
-            else:
-                st.markdown("**LinkedIn:** N/A")
             st.markdown(f"**Interesting Fact:** {user.get('interesting_fact') or 'N/A'}")
             st.markdown(f"**Additional Context:** {user.get('additional_context') or 'N/A'}")
 
