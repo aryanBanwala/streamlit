@@ -14,7 +14,7 @@ sys.path.insert(0, parent_dir)
 sys.path.insert(0, scripts_dir)
 
 try:
-    from dependencies import get_supabase_client
+    from dependencies import get_supabase_client, get_pinecone_client, get_pinecone_index_name
 except ImportError:
     st.error("Error: 'dependencies.py' not found.")
     st.stop()
@@ -118,6 +118,39 @@ def update_should_be_removed(user_id: str, value):
         st.error(f"Error updating user: {e}")
         return False
 
+def update_pinecone_should_be_removed(user_id: str, value: bool):
+    """Update shouldBeRemoved in Pinecone for all 4 namespaces."""
+    namespaces = ["lifestyle", "__default__", "work_edu", "personality"]
+    pc = get_pinecone_client()
+    if not pc:
+        st.warning("Pinecone client not available")
+        return False
+
+    index_name = get_pinecone_index_name()
+    index = pc.Index(index_name)
+
+    for ns in namespaces:
+        try:
+            # Fetch existing record to get current metadata
+            result = index.fetch(ids=[user_id], namespace=ns)
+            if user_id in result.vectors:
+                existing = result.vectors[user_id]
+                metadata = existing.metadata or {}
+                metadata["shouldBeRemoved"] = value
+                # Update with existing vector and new metadata
+                index.upsert(
+                    vectors=[{
+                        "id": user_id,
+                        "values": existing.values,
+                        "metadata": metadata
+                    }],
+                    namespace=ns
+                )
+        except Exception as e:
+            st.error(f"Error updating Pinecone namespace {ns}: {e}")
+            return False
+    return True
+
 # --- Session State Initialization ---
 if 'remove_current_index' not in st.session_state:
     st.session_state.remove_current_index = 0
@@ -131,9 +164,29 @@ if 'remove_refresh_trigger' not in st.session_state:
 users = fetch_users_to_review()
 st.session_state.remove_users_list = users
 
+# --- Search by User ID ---
+st.sidebar.header("Search by User ID")
+search_user_id = st.sidebar.text_input("Enter User ID", key="search_user_id", placeholder="e.g., 6097cfc5-32f6-...")
+
+if st.sidebar.button("Search", key="search_btn"):
+    if search_user_id:
+        # Find user index in the list
+        found_index = None
+        for idx, user in enumerate(users):
+            if user.get('user_id') == search_user_id.strip():
+                found_index = idx
+                break
+
+        if found_index is not None:
+            st.session_state.remove_current_index = found_index
+            st.rerun()
+        else:
+            st.sidebar.error("User not found")
+
+st.sidebar.divider()
+
 # --- Left Sidebar: Removed Users List ---
 st.sidebar.header("Removed Users")
-st.sidebar.divider()
 
 removed_users = fetch_removed_users()
 
@@ -202,12 +255,14 @@ with col_action2:
     if is_removed:
         if st.button("Undo Removal", key="undo_btn", type="secondary", use_container_width=True):
             if update_should_be_removed(user_id, None):
+                update_pinecone_should_be_removed(user_id, False)
                 st.success(f"Undo: {current_user.get('name', 'User')} restored!")
                 st.session_state.remove_refresh_trigger += 1
                 st.rerun()
     else:
         if st.button("Remove This Person", key="remove_btn", type="primary", use_container_width=True):
             if update_should_be_removed(user_id, True):
+                update_pinecone_should_be_removed(user_id, True)
                 st.warning(f"{current_user.get('name', 'User')} marked for removal!")
                 st.session_state.remove_refresh_trigger += 1
                 st.rerun()
