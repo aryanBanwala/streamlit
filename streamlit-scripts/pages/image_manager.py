@@ -175,31 +175,36 @@ if user_data:
     with col_add:
         add_profile_img = st.button("+ Add Image", key="add_profile_btn", use_container_width=True)
 
-    # Add profile image uploader
+    # Add profile image uploader (multiple files)
     if add_profile_img or st.session_state.get('show_profile_uploader'):
         st.session_state.show_profile_uploader = True
-        uploaded_file = st.file_uploader(
-            "Upload new profile image",
+        uploaded_files = st.file_uploader(
+            "Upload profile images",
             type=['jpg', 'jpeg', 'png'],
-            key="profile_uploader"
+            key="profile_uploader",
+            accept_multiple_files=True
         )
-        if uploaded_file:
-            with st.spinner("Uploading..."):
-                # Generate filename and upload
-                index = len(profile_images)
-                filename = generate_profile_filename(user_id, index)
-                file_path = f"public/{filename}"
+        if uploaded_files:
+            with st.spinner(f"Uploading {len(uploaded_files)} image(s)..."):
+                success_count = 0
+                for i, uploaded_file in enumerate(uploaded_files):
+                    # Generate filename and upload
+                    index = len(profile_images) + i
+                    filename = generate_profile_filename(user_id, index)
+                    file_path = f"public/{filename}"
 
-                url = upload_to_storage(uploaded_file.getvalue(), file_path)
-                if url:
-                    # Append to array and update DB
-                    profile_images.append(url)
-                    if update_profile_images(user_id, profile_images):
-                        st.success("Image uploaded successfully!")
-                        st.session_state.show_profile_uploader = False
-                        # Refresh user data
-                        st.session_state.image_manager_user_data = fetch_user_by_id(user_id)
-                        st.rerun()
+                    url = upload_to_storage(uploaded_file.getvalue(), file_path)
+                    if url:
+                        profile_images.append(url)
+                        success_count += 1
+
+                # Update DB once with all new images
+                if success_count > 0 and update_profile_images(user_id, profile_images):
+                    st.success(f"{success_count} image(s) uploaded successfully!")
+                    st.session_state.show_profile_uploader = False
+                    # Refresh user data
+                    st.session_state.image_manager_user_data = fetch_user_by_id(user_id)
+                    st.rerun()
 
     # Display profile images in grid (fixed width ~200px per image)
     if profile_images:
