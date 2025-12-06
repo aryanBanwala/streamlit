@@ -77,14 +77,20 @@ st.caption("Review users and mark them for removal")
 
 # --- Data Fetching Functions ---
 
-def fetch_users_to_review():
+def fetch_users_to_review(after_date=None):
     """Fetch users where hasAppropriatePhotos is true or null (not false)."""
     try:
         # Fetch all users and filter in Python since Supabase doesn't support OR with NULL easily
-        res = supabase.table('user_metadata').select(
+        query = supabase.table('user_metadata').select(
             'user_id, name, city, area, work_exp, education, interesting_facts, religion, '
-            'profile_images, collage_images, instagram_images, "shouldBeRemoved", "hasAppropriatePhotos"'
-        ).execute()
+            'profile_images, collage_images, instagram_images, "shouldBeRemoved", "hasAppropriatePhotos", created_at'
+        )
+
+        # Add date filter if provided
+        if after_date:
+            query = query.gte('created_at', after_date.isoformat())
+
+        res = query.execute()
 
         if not res.data:
             return []
@@ -159,9 +165,19 @@ if 'remove_users_list' not in st.session_state:
 if 'remove_refresh_trigger' not in st.session_state:
     st.session_state.remove_refresh_trigger = 0
 
+# --- Date Filter ---
+st.sidebar.header("Filter by Date")
+filter_date = st.sidebar.date_input(
+    "Show users created after",
+    value=None,
+    key="filter_date"
+)
+
+st.sidebar.divider()
+
 # --- Load Users ---
 # Reload when refresh_trigger changes
-users = fetch_users_to_review()
+users = fetch_users_to_review(after_date=filter_date)
 st.session_state.remove_users_list = users
 
 # --- Search by User ID ---
