@@ -528,6 +528,7 @@ else:
         is_selected = st.session_state.match_status_selected == profile['profiles_id']
 
         # Status color
+        #
         if is_rejected(profile):
             status_color = "#ef4444"
         elif status_text == "Connected":
