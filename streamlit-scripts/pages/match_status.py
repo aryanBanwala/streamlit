@@ -355,7 +355,7 @@ status_filter = st.sidebar.selectbox(
 
 search_id = st.sidebar.text_input("Search by User ID")
 
-date_filter = st.sidebar.date_input("Show matches after", value=None)
+date_filter = st.sidebar.date_input("Show matches after", value=date(2024, 12, 3))
 
 st.sidebar.divider()
 
