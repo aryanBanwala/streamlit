@@ -163,6 +163,11 @@ def display_user_card(meta: dict, label: str):
 if 'selected_profile' not in st.session_state:
     st.session_state.selected_profile = None
 
+# Check if redirected from Match Status page with a profile to select
+if 'human_approval_select_profile' in st.session_state and st.session_state.human_approval_select_profile:
+    st.session_state.selected_profile = st.session_state.human_approval_select_profile
+    st.session_state.human_approval_select_profile = None  # Clear after use
+
 
 # --- Fetch Data ---
 pending_profiles = fetch_pending_profiles()
