@@ -112,7 +112,7 @@ def fetch_search_chat(user_id: str):
 
 # --- Helper Functions ---
 def get_stage_index(profile: dict) -> int:
-    """Return stage index (0-5) based on profile_status."""
+    """Return stage index (0-5) based on profile_statISus."""
     status = profile.get('profile_status', '')
 
     # Stage 5: Connected (both yes and processed)
@@ -141,12 +141,12 @@ def get_stage_index(profile: dict) -> int:
 
 def is_rejected(profile: dict) -> bool:
     """Check if match was rejected - either party explicitly said no."""
-    # Male rejected
-    if profile.get('male_response') is False:
+    # Male rejected (use == False, not 'is False' for database booleans)
+    if profile.get('male_response') == False:
         return True
 
     # Female rejected
-    if profile.get('female_response') is False:
+    if profile.get('female_response') == False:
         return True
 
     return False
