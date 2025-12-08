@@ -116,7 +116,7 @@ def get_stage_index(profile: dict) -> int:
     status = profile.get('profile_status', '')
 
     # Stage 5: Connected (both yes and processed)
-    if 'female_yes-male_yes' in status and 'msg_null' not in status:
+    if 'female_yes-male_yes_msg_match' in status:
         return 5
 
     # Stage 4: Both Yes (waiting for final processing)
