@@ -140,15 +140,13 @@ def get_stage_index(profile: dict) -> int:
 
 
 def is_rejected(profile: dict) -> bool:
-    """Check if match was rejected after notification."""
-    status = profile.get('profile_status', '')
-
-    # Male rejected after female's profile was sent to him
-    if 'msg_ms' in status and profile.get('male_response') is False:
+    """Check if match was rejected - either party explicitly said no."""
+    # Male rejected
+    if profile.get('male_response') is False:
         return True
 
-    # Female rejected after male's profile was sent to her
-    if 'msg_fs' in status and profile.get('female_response') is False:
+    # Female rejected
+    if profile.get('female_response') is False:
         return True
 
     return False
