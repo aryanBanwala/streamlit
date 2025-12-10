@@ -343,12 +343,42 @@ with col2:
                     if not session_messages:
                         st.warning("No messages in this session.")
                     else:
+                        current_date = None  # Track date for WhatsApp-style grouping
+
                         for msg_idx, msg in enumerate(session_messages):
                             role = msg.get('role', 'unknown')
                             content = msg.get('message', '')
                             image_urls = msg.get('image_urls', [])
                             msg_metadata = msg.get('metadata', {})
                             msg_type = msg.get('message_type', 'text')
+                            msg_created_at = msg.get('created_at', '')
+
+                            # Extract date and time from timestamp
+                            msg_date = None
+                            msg_time = None
+                            if msg_created_at:
+                                msg_date = msg_created_at[:10]  # YYYY-MM-DD
+                                msg_time = msg_created_at[11:16]  # HH:MM
+
+                            # Show date header if date changed (WhatsApp style)
+                            if msg_date and msg_date != current_date:
+                                current_date = msg_date
+                                # Parse date and get day name
+                                from datetime import datetime
+                                try:
+                                    date_obj = datetime.strptime(msg_date, '%Y-%m-%d')
+                                    day_name = date_obj.strftime('%A')  # Monday, Tuesday, etc.
+                                    formatted_date = date_obj.strftime('%d %b %Y')  # 10 Dec 2025
+                                    date_display = f"{day_name}, {formatted_date}"
+                                except:
+                                    date_display = msg_date
+                                st.markdown(
+                                    f"<div style='text-align: center; margin: 15px 0;'>"
+                                    f"<span style='background-color: #e1f3fb; padding: 5px 15px; border-radius: 8px; font-size: 12px; color: #555;'>"
+                                    f"📅 {date_display}"
+                                    f"</span></div>",
+                                    unsafe_allow_html=True
+                                )
 
                             with st.chat_message(name=role):
                                 st.markdown(content)
@@ -374,3 +404,12 @@ with col2:
                                     # Show raw metadata for onboarding chats
                                     with st.expander("View Message Metadata"):
                                         st.json(msg_metadata)
+
+                                # Show time at bottom right (WhatsApp style)
+                                if msg_time:
+                                    st.markdown(
+                                        f"<div style='text-align: right; margin-top: -10px;'>"
+                                        f"<span style='font-size: 11px; color: #888;'>{msg_time}</span>"
+                                        f"</div>",
+                                        unsafe_allow_html=True
+                                    )

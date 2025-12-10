@@ -4,3 +4,4 @@ supabase
 pinecone
 openai
 python-dotenv
+plotly
