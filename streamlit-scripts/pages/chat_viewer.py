@@ -107,11 +107,14 @@ def fetch_chats_by_type(user_id: str, chat_type: str):
     return sessions, messages
 
 @st.cache_data(ttl=60)
-def fetch_users_with_chat_type(chat_type: str):
-    """Fetch user_ids that have at least one session of the given chat_type."""
+def fetch_users_with_chat_type(chat_type: str, after_date: str = None):
+    """Fetch user_ids that have at least one session of the given chat_type after the specified date."""
     try:
         # Get distinct user_ids from chat_sessions with the given chat_type
-        res = supabase.table('chat_sessions').select('user_id').eq('chat_type', chat_type).execute()
+        query = supabase.table('chat_sessions').select('user_id').eq('chat_type', chat_type)
+        if after_date:
+            query = query.gte('created_at', after_date)
+        res = query.execute()
         if res.data:
             return list(set([s['user_id'] for s in res.data]))
         return []
@@ -233,12 +236,26 @@ chat_type = st.sidebar.radio(
     horizontal=True
 )
 
+# Date filter
+st.sidebar.divider()
+st.sidebar.header("Date Filter")
+from datetime import datetime, timedelta
+default_date = datetime.now() - timedelta(days=7)  # Default: 7 days ago
+filter_date = st.sidebar.date_input(
+    "Show chats after:",
+    value=default_date,
+    max_value=datetime.now(),
+    help="Only show users who have chat sessions after this date"
+)
+# Convert date to string format for query
+filter_date_str = filter_date.strftime('%Y-%m-%d') if filter_date else None
+
 # Apply filters
 filtered_df = df_users.copy()
 
-# Filter by chat type - only show users who have chats of the selected type
+# Filter by chat type and date - only show users who have chats of the selected type after the date
 with st.spinner(f"Filtering users with {chat_type} chats..."):
-    users_with_chat_type = fetch_users_with_chat_type(chat_type)
+    users_with_chat_type = fetch_users_with_chat_type(chat_type, filter_date_str)
 
 if users_with_chat_type:
     filtered_df = filtered_df[filtered_df['user_id'].isin(users_with_chat_type)]
