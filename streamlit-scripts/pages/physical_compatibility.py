@@ -160,27 +160,72 @@ def update_matches_ranked(run_id: str):
         pass  # Non-critical, don't block
 
 
-def display_user_photos(meta: dict, label: str):
-    """Display user photos in a compact row."""
+def display_user_card(meta: dict, label: str, top_features: list = None, user_id: str = None):
+    """Display user photos and feature data."""
     name = meta.get('name', 'Unknown') if meta else 'Unknown'
-    st.markdown(f"**{label}: {name}**")
+    age = meta.get('age', '') if meta else ''
+    city = meta.get('city', '') if meta else ''
+
+    st.markdown(f"**{label}: {name}** {f'({age})' if age else ''} {f'- {city}' if city else ''}")
 
     if not meta:
         st.caption("No user data")
+        # Show placeholder for no images
+        st.markdown("""
+        <div style="height: 200px; background: #2d2d2d; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #888;">
+            No images available
+        </div>
+        """, unsafe_allow_html=True)
         return
 
+    # Show photos in horizontal scrollable container
     photos = meta.get('profile_images') or meta.get('instagram_images') or []
     if photos and isinstance(photos, list):
-        display_photos = photos[:2]
-        cols = st.columns(2)
-        for idx, url in enumerate(display_photos):
-            with cols[idx]:
-                try:
-                    st.image(url, width=150)
-                except Exception:
-                    st.caption("Error")
+        # Create unique key for this user
+        unique_key = user_id or name
+
+        # Build horizontal scroll HTML
+        images_html = ""
+        for url in photos:
+            images_html += f'<img src="{url}" style="height: 200px; width: auto; object-fit: cover; border-radius: 8px; flex-shrink: 0;">'
+
+        st.markdown(f"""
+        <div style="
+            display: flex;
+            gap: 8px;
+            overflow-x: auto;
+            padding: 8px 0;
+            scrollbar-width: thin;
+        ">
+            {images_html}
+        </div>
+        """, unsafe_allow_html=True)
     else:
-        st.caption("No photos")
+        # Show placeholder when no photos
+        st.markdown("""
+        <div style="height: 200px; background: #2d2d2d; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #888;">
+            No images available
+        </div>
+        """, unsafe_allow_html=True)
+
+    # Show top features if available
+    if top_features:
+        with st.expander("Feature Data", expanded=False):
+            for feature in top_features:
+                feat_name = feature.get('feature_name', '').replace('_', ' ').title()
+                user_val = feature.get('user_value', 'N/A')
+                candidate_val = feature.get('candidate_value', 'N/A')
+                similarity = feature.get('similarity', 0)
+
+                # Color code by similarity
+                if similarity >= 0.8:
+                    color = "green"
+                elif similarity >= 0.5:
+                    color = "orange"
+                else:
+                    color = "red"
+
+                st.markdown(f":{color}[{feat_name}]: {user_val} vs {candidate_val} (sim: {similarity:.1f})")
 
 
 def render_match_card(match: dict, index: int, existing_score: int = None, run_timestamp: str = None, run_id: str = None):
@@ -194,28 +239,33 @@ def render_match_card(match: dict, index: int, existing_score: int = None, run_t
     user_a_name = user_a_meta.get('name', 'Unknown') if user_a_meta else 'Unknown'
     user_b_name = user_b_meta.get('name', 'Unknown') if user_b_meta else 'Unknown'
 
+    # Get feature data from match
+    top_features_a = match.get('top_features_a', [])
+    top_features_b = match.get('top_features_b', [])
+
     with st.container():
         score_display = f"{existing_score}/5" if existing_score else "Not scored"
-        st.markdown(f"**Match {index + 1}: {user_a_name} & {user_b_name}** | Prob: {match.get('success_probability', 0):.2f} | Avg: {match.get('avg_score', 0):.2f} | Score: {score_display}")
+        st.markdown(f"### Match {index + 1}: {user_a_name} & {user_b_name}")
+        st.caption(f"Prob: {match.get('success_probability', 0):.2f} | Avg Score: {match.get('avg_score', 0):.2f} | Current Score: {score_display}")
 
         col_a, col_b = st.columns(2)
 
         with col_a:
             gender_a = match.get('user_a_gender', 'unknown').capitalize()
-            display_user_photos(user_a_meta, gender_a)
+            display_user_card(user_a_meta, gender_a, top_features_a, user_a_id)
 
         with col_b:
             gender_b = match.get('user_b_gender', 'unknown').capitalize()
-            display_user_photos(user_b_meta, gender_b)
+            display_user_card(user_b_meta, gender_b, top_features_b, user_b_id)
 
-        score_cols = st.columns([1, 0.5, 0.5, 0.5, 0.5, 0.5, 1])
-        with score_cols[0]:
-            st.caption("Score:")
+        # Score buttons
+        st.markdown("**Rate Physical Compatibility:**")
+        score_cols = st.columns(5)
         for i in range(5):
-            with score_cols[i + 1]:
+            with score_cols[i]:
                 score_val = i + 1
                 btn_type = "primary" if existing_score == score_val else "secondary"
-                if st.button(str(score_val), key=f"score_{user_a_id}_{user_b_id}_{score_val}", type=btn_type):
+                if st.button(str(score_val), key=f"score_{user_a_id}_{user_b_id}_{score_val}", type=btn_type, use_container_width=True):
                     if save_score(match, score_val, run_timestamp, run_id):
                         st.rerun()
 
