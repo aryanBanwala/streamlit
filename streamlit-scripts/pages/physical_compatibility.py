@@ -79,6 +79,45 @@ def generate_pair_id(user_a_id: str, user_b_id: str) -> str:
     return f"{user_a_id}_{user_b_id}"
 
 
+# Physical feature names to display
+PHYSICAL_FEATURES = [
+    'body_type_male',
+    'body_type_female',
+    'hair_type',
+    'facial_emotions',
+    'aesthetic_types',
+    'photo_activity_type',
+]
+
+
+@st.cache_data(ttl=60)
+def fetch_user_physical_features(user_id: str):
+    """Fetch physical features for a user from user_feature_values table."""
+    try:
+        res = supabase.table('user_feature_values').select(
+            'feature_name, feature_value, feature_values, confidence_score'
+        ).eq('user_id', user_id).in_('feature_name', PHYSICAL_FEATURES).execute()
+
+        features = []
+        if res.data:
+            for row in res.data:
+                # Use feature_value if available, else feature_values
+                value = row.get('feature_value') or row.get('feature_values')
+                if isinstance(value, list):
+                    value = ', '.join(str(v) for v in value)
+                elif isinstance(value, dict):
+                    value = str(value)
+
+                features.append({
+                    'feature_name': row['feature_name'],
+                    'value': value or 'N/A',
+                    'confidence': row.get('confidence_score', 0) or 0
+                })
+        return features
+    except Exception as e:
+        return []
+
+
 def fetch_existing_scores(run_timestamp: str):
     """Fetch existing scores for a given run."""
     try:
@@ -160,8 +199,8 @@ def update_matches_ranked(run_id: str):
         pass  # Non-critical, don't block
 
 
-def display_user_card(meta: dict, label: str, top_features: list = None, user_id: str = None):
-    """Display user photos and feature data."""
+def display_user_card(meta: dict, label: str, user_id: str = None):
+    """Display user photos and physical feature data."""
     name = meta.get('name', 'Unknown') if meta else 'Unknown'
     age = meta.get('age', '') if meta else ''
     city = meta.get('city', '') if meta else ''
@@ -170,7 +209,6 @@ def display_user_card(meta: dict, label: str, top_features: list = None, user_id
 
     if not meta:
         st.caption("No user data")
-        # Show placeholder for no images
         st.markdown("""
         <div style="height: 200px; background: #2d2d2d; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #888;">
             No images available
@@ -181,10 +219,6 @@ def display_user_card(meta: dict, label: str, top_features: list = None, user_id
     # Show photos in horizontal scrollable container
     photos = meta.get('profile_images') or meta.get('instagram_images') or []
     if photos and isinstance(photos, list):
-        # Create unique key for this user
-        unique_key = user_id or name
-
-        # Build horizontal scroll HTML
         images_html = ""
         for url in photos:
             images_html += f'<img src="{url}" style="height: 200px; width: auto; object-fit: cover; border-radius: 8px; flex-shrink: 0;">'
@@ -201,31 +235,31 @@ def display_user_card(meta: dict, label: str, top_features: list = None, user_id
         </div>
         """, unsafe_allow_html=True)
     else:
-        # Show placeholder when no photos
         st.markdown("""
         <div style="height: 200px; background: #2d2d2d; border-radius: 8px; display: flex; align-items: center; justify-content: center; color: #888;">
             No images available
         </div>
         """, unsafe_allow_html=True)
 
-    # Show top features if available
-    if top_features:
-        with st.expander("Feature Data", expanded=False):
-            for feature in top_features:
-                feat_name = feature.get('feature_name', '').replace('_', ' ').title()
-                user_val = feature.get('user_value', 'N/A')
-                candidate_val = feature.get('candidate_value', 'N/A')
-                similarity = feature.get('similarity', 0)
+    # Fetch and show physical features from user_feature_values table
+    if user_id:
+        physical_features = fetch_user_physical_features(user_id)
+        if physical_features:
+            with st.expander("Physical Features", expanded=False):
+                for feature in physical_features:
+                    feat_name = feature.get('feature_name', '').replace('_', ' ').title()
+                    value = feature.get('value', 'N/A')
+                    confidence = feature.get('confidence', 0)
 
-                # Color code by similarity
-                if similarity >= 0.8:
-                    color = "green"
-                elif similarity >= 0.5:
-                    color = "orange"
-                else:
-                    color = "red"
+                    # Color code by confidence
+                    if confidence >= 0.8:
+                        color = "green"
+                    elif confidence >= 0.5:
+                        color = "orange"
+                    else:
+                        color = "gray"
 
-                st.markdown(f":{color}[{feat_name}]: {user_val} vs {candidate_val} (sim: {similarity:.1f})")
+                    st.markdown(f":{color}[{feat_name}]: {value} (conf: {confidence:.2f})")
 
 
 def render_match_card(match: dict, index: int, existing_score: int = None, run_timestamp: str = None, run_id: str = None):
@@ -239,10 +273,6 @@ def render_match_card(match: dict, index: int, existing_score: int = None, run_t
     user_a_name = user_a_meta.get('name', 'Unknown') if user_a_meta else 'Unknown'
     user_b_name = user_b_meta.get('name', 'Unknown') if user_b_meta else 'Unknown'
 
-    # Get feature data from match
-    top_features_a = match.get('top_features_a', [])
-    top_features_b = match.get('top_features_b', [])
-
     with st.container():
         score_display = f"{existing_score}/5" if existing_score else "Not scored"
         st.markdown(f"### Match {index + 1}: {user_a_name} & {user_b_name}")
@@ -252,11 +282,11 @@ def render_match_card(match: dict, index: int, existing_score: int = None, run_t
 
         with col_a:
             gender_a = match.get('user_a_gender', 'unknown').capitalize()
-            display_user_card(user_a_meta, gender_a, top_features_a, user_a_id)
+            display_user_card(user_a_meta, gender_a, user_a_id)
 
         with col_b:
             gender_b = match.get('user_b_gender', 'unknown').capitalize()
-            display_user_card(user_b_meta, gender_b, top_features_b, user_b_id)
+            display_user_card(user_b_meta, gender_b, user_b_id)
 
         # Score buttons
         st.markdown("**Rate Physical Compatibility:**")
