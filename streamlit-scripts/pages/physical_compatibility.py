@@ -135,16 +135,12 @@ def fetch_existing_scores(run_timestamp: str):
 
 
 def save_score(match: dict, score: int, run_timestamp: str, run_id: str):
-    """Save or update a physical compatibility score."""
+    """Save or update a physical compatibility score using upsert."""
     user_a_id = match['user_a_id']
     user_b_id = match['user_b_id']
     pair_id = generate_pair_id(user_a_id, user_b_id)
 
     try:
-        existing = supabase.table(SCORES_TABLE).select('id').eq(
-            'pair_id', pair_id
-        ).eq('run_timestamp', run_timestamp).maybe_single().execute()
-
         record = {
             'pair_id': pair_id,
             'user_a_id': user_a_id,
@@ -163,40 +159,19 @@ def save_score(match: dict, score: int, run_timestamp: str, run_id: str):
             'run_timestamp': run_timestamp,
             'scored_at': datetime.now().isoformat(),
             'updated_at': datetime.now().isoformat(),
+            'created_at': datetime.now().isoformat(),
         }
 
-        is_new_score = False
-        if existing and existing.data:
-            supabase.table(SCORES_TABLE).update(record).eq(
-                'id', existing.data['id']
-            ).execute()
-        else:
-            record['created_at'] = datetime.now().isoformat()
-            supabase.table(SCORES_TABLE).insert(record).execute()
-            is_new_score = True
-
-        # Update matches_ranked count in match_runs if new score
-        if is_new_score and run_id:
-            update_matches_ranked(run_id)
+        # Upsert: insert or update on conflict (pair_id, run_timestamp)
+        supabase.table(SCORES_TABLE).upsert(
+            record,
+            on_conflict='pair_id,run_timestamp'
+        ).execute()
 
         return True
     except Exception as e:
         st.error(f"Failed to save score: {e}")
         return False
-
-
-def update_matches_ranked(run_id: str):
-    """Increment matches_ranked count for a run."""
-    try:
-        # Get current count
-        res = supabase.table(RUNS_TABLE).select('matches_ranked').eq('id', run_id).maybe_single().execute()
-        if res.data:
-            current = res.data.get('matches_ranked', 0) or 0
-            supabase.table(RUNS_TABLE).update({
-                'matches_ranked': current + 1
-            }).eq('id', run_id).execute()
-    except Exception as e:
-        pass  # Non-critical, don't block
 
 
 def display_user_card(meta: dict, label: str, user_id: str = None):
@@ -262,10 +237,11 @@ def display_user_card(meta: dict, label: str, user_id: str = None):
                     st.markdown(f":{color}[{feat_name}]: {value} (conf: {confidence:.2f})")
 
 
-def render_match_card(match: dict, index: int, existing_score: int = None, run_timestamp: str = None, run_id: str = None):
-    """Render a single match card with scoring buttons."""
+def render_match_card(match: dict, index: int, existing_scores_dict: dict, run_timestamp: str = None, run_id: str = None):
+    """Render a single match card with scoring buttons using fragment for quick updates."""
     user_a_id = match['user_a_id']
     user_b_id = match['user_b_id']
+    pair_id = generate_pair_id(user_a_id, user_b_id)
 
     user_a_meta = fetch_user_metadata(user_a_id)
     user_b_meta = fetch_user_metadata(user_b_id)
@@ -274,7 +250,11 @@ def render_match_card(match: dict, index: int, existing_score: int = None, run_t
     user_b_name = user_b_meta.get('name', 'Unknown') if user_b_meta else 'Unknown'
 
     with st.container():
-        score_display = f"{existing_score}/5" if existing_score else "Not scored"
+        # Get current score from session state or existing scores
+        score_key = f"local_score_{pair_id}"
+        current_score = st.session_state.get(score_key) or existing_scores_dict.get(pair_id)
+
+        score_display = f"{current_score}/5" if current_score else "Not scored"
         st.markdown(f"### Match {index + 1}: {user_a_name} & {user_b_name}")
         st.caption(f"Prob: {match.get('success_probability', 0):.2f} | Avg Score: {match.get('avg_score', 0):.2f} | Current Score: {score_display}")
 
@@ -288,17 +268,21 @@ def render_match_card(match: dict, index: int, existing_score: int = None, run_t
             gender_b = match.get('user_b_gender', 'unknown').capitalize()
             display_user_card(user_b_meta, gender_b, user_b_id)
 
-        # Score buttons
-        st.markdown("**Rate Physical Compatibility:**")
-        score_cols = st.columns(5)
-        for i in range(5):
-            with score_cols[i]:
-                score_val = i + 1
-                btn_type = "primary" if existing_score == score_val else "secondary"
-                if st.button(str(score_val), key=f"score_{user_a_id}_{user_b_id}_{score_val}", type=btn_type, use_container_width=True):
-                    if save_score(match, score_val, run_timestamp, run_id):
-                        st.rerun()
+        # Score buttons using fragment for quick updates
+        @st.fragment
+        def score_buttons():
+            local_score = st.session_state.get(score_key) or existing_scores_dict.get(pair_id)
+            score_cols = st.columns(5)
+            for i in range(5):
+                with score_cols[i]:
+                    score_val = i + 1
+                    btn_type = "primary" if local_score == score_val else "secondary"
+                    if st.button(str(score_val), key=f"score_{user_a_id}_{user_b_id}_{score_val}", type=btn_type, use_container_width=True):
+                        st.session_state[score_key] = score_val
+                        save_score(match, score_val, run_timestamp, run_id)
+                        st.rerun(scope="fragment")
 
+        score_buttons()
         st.divider()
 
 
@@ -405,6 +389,4 @@ if not mutual_matches:
 
 # Display matches
 for idx, match in enumerate(mutual_matches):
-    pair_id = generate_pair_id(match['user_a_id'], match['user_b_id'])
-    current_score = existing_scores.get(pair_id)
-    render_match_card(match, idx, current_score, run_timestamp, selected_run_id)
+    render_match_card(match, idx, existing_scores, run_timestamp, selected_run_id)
