@@ -22,12 +22,13 @@ image_manager_page = st.Page("pages/image_manager.py", title="Image Manager", ic
 match_status_page = st.Page("pages/match_status.py", title="Match Status", icon="💑")
 physical_compat_page = st.Page("pages/physical_compatibility.py", title="Physical Compatibility", icon="💪")
 attractiveness_page = st.Page("pages/attractiveness_rating.py", title="Attractiveness Rating", icon="⭐")
+user_segments_page = st.Page("pages/user_segments.py", title="User Segments", icon="📊")
 
 # --- Navigation ---
 pg = st.navigation(
     {
         "Dashboard": [home_page],
-        "User Management": [waitlist_page, human_approval_page, remove_users_page, image_manager_page, match_status_page, physical_compat_page, attractiveness_page],
+        "User Management": [waitlist_page, human_approval_page, remove_users_page, image_manager_page, match_status_page, physical_compat_page, attractiveness_page, user_segments_page],
         "Analytics": [chat_viewer_page],
     }
 )
