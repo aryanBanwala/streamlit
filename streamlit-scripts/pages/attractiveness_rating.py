@@ -119,7 +119,7 @@ if 'ar_search_user_id' not in st.session_state:
 if 'ar_search_mode' not in st.session_state:
     st.session_state.ar_search_mode = False
 if 'ar_rating_filter' not in st.session_state:
-    st.session_state.ar_rating_filter = "all"
+    st.session_state.ar_rating_filter = "not rated"
 
 
 # --- Sidebar ---
@@ -143,7 +143,7 @@ if selected_gender != st.session_state.ar_gender_filter:
     st.rerun()
 
 # Rating status filter
-rating_options = ["all", "not rated", "rated"]
+rating_options = ["not rated", "rated"]
 selected_rating = st.sidebar.selectbox(
     "Rating Status",
     options=rating_options,
