@@ -318,7 +318,7 @@ if run_id_filter != st.session_state.ms_last_run_id or phase_filter != st.sessio
 st.title("Match Stats")
 
 # Tabs
-tab_overview, tab_user, tab_mutual, tab_trends = st.tabs(["Overview", "User Search", "Mutual Likes", "Trends"])
+tab_overview, tab_user, tab_mutual, tab_male_likes, tab_female_likes, tab_trends = st.tabs(["Overview", "User Search", "Mutual Likes", "Male Likes", "Female Likes", "Trends"])
 
 
 # --- Tab 1: Overview ---
@@ -347,72 +347,175 @@ with tab_overview:
         # Add gender column to dataframe
         df['sender_gender'] = df['current_user_id'].map(gender_map)
 
-        # Row 1: Core metrics
-        col1, col2, col3, col4 = st.columns(4)
+        # Split data by gender
+        df_male = df[df['sender_gender'] == 'male']
+        df_female = df[df['sender_gender'] == 'female']
 
-        with col1:
-            st.metric("Total Matches", f"{total_count:,}")
+        # Calculate all stats for combined, male, female
+        def calc_stats(data):
+            total = len(data)
+            liked = len(data[data['is_liked'] == 'liked'])
+            disliked = len(data[data['is_liked'] == 'disliked'])
+            passed = len(data[data['is_liked'] == 'passed'])
+            viewed = int(data['is_viewed'].sum()) if 'is_viewed' in data.columns else 0
+            mutual = int(data['is_mutual'].sum()) if 'is_mutual' in data.columns else 0
+            avg_mutual = data['mutual_score'].dropna().mean()
+            avg_know = data['know_more_count'].dropna().mean()
+            return {
+                'total': total,
+                'liked': liked,
+                'disliked': disliked,
+                'passed': passed,
+                'viewed': viewed,
+                'mutual': mutual,
+                'avg_mutual': avg_mutual,
+                'avg_know': avg_know,
+                'like_rate': (liked / total * 100) if total > 0 else 0,
+                'dislike_rate': (disliked / total * 100) if total > 0 else 0,
+                'pass_rate': (passed / total * 100) if total > 0 else 0,
+                'view_rate': (viewed / total * 100) if total > 0 else 0,
+                'mutual_rate': (mutual / total * 100) if total > 0 else 0,
+            }
 
-        with col2:
-            liked_count = len(df[df['is_liked'] == 'liked'])
-            like_rate = (liked_count / total_count * 100) if total_count > 0 else 0
-            st.metric("Likes", f"{liked_count:,}", f"{like_rate:.1f}%")
+        stats_combined = calc_stats(df)
+        stats_male = calc_stats(df_male)
+        stats_female = calc_stats(df_female)
 
-        with col3:
-            disliked_count = len(df[df['is_liked'] == 'disliked'])
-            dislike_rate = (disliked_count / total_count * 100) if total_count > 0 else 0
-            st.metric("Dislikes", f"{disliked_count:,}", f"{dislike_rate:.1f}%")
+        # Display metrics in 3 columns: Combined, Male, Female
+        st.markdown("### Core Metrics")
 
-        with col4:
-            passed_count = len(df[df['is_liked'] == 'passed'])
-            pass_rate = (passed_count / total_count * 100) if total_count > 0 else 0
-            st.metric("Passed", f"{passed_count:,}", f"{pass_rate:.1f}%")
+        # Headers
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("**Metric**")
+        with col_combined:
+            st.markdown("**Combined**")
+        with col_male:
+            st.markdown("**Male**")
+        with col_female:
+            st.markdown("**Female**")
+
+        # Total Matches
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("Total Matches")
+        with col_combined:
+            st.metric("", f"{stats_combined['total']:,}", label_visibility="collapsed")
+        with col_male:
+            st.metric("", f"{stats_male['total']:,}", label_visibility="collapsed")
+        with col_female:
+            st.metric("", f"{stats_female['total']:,}", label_visibility="collapsed")
+
+        # Likes
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("Likes")
+        with col_combined:
+            st.metric("", f"{stats_combined['liked']:,}", f"{stats_combined['like_rate']:.1f}%", label_visibility="collapsed")
+        with col_male:
+            st.metric("", f"{stats_male['liked']:,}", f"{stats_male['like_rate']:.1f}%", label_visibility="collapsed")
+        with col_female:
+            st.metric("", f"{stats_female['liked']:,}", f"{stats_female['like_rate']:.1f}%", label_visibility="collapsed")
+
+        # Dislikes
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("Dislikes")
+        with col_combined:
+            st.metric("", f"{stats_combined['disliked']:,}", f"{stats_combined['dislike_rate']:.1f}%", label_visibility="collapsed")
+        with col_male:
+            st.metric("", f"{stats_male['disliked']:,}", f"{stats_male['dislike_rate']:.1f}%", label_visibility="collapsed")
+        with col_female:
+            st.metric("", f"{stats_female['disliked']:,}", f"{stats_female['dislike_rate']:.1f}%", label_visibility="collapsed")
+
+        # Passed
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("Passed")
+        with col_combined:
+            st.metric("", f"{stats_combined['passed']:,}", f"{stats_combined['pass_rate']:.1f}%", label_visibility="collapsed")
+        with col_male:
+            st.metric("", f"{stats_male['passed']:,}", f"{stats_male['pass_rate']:.1f}%", label_visibility="collapsed")
+        with col_female:
+            st.metric("", f"{stats_female['passed']:,}", f"{stats_female['pass_rate']:.1f}%", label_visibility="collapsed")
+
+        st.divider()
+        st.markdown("### Engagement Metrics")
+
+        # Headers
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("**Metric**")
+        with col_combined:
+            st.markdown("**Combined**")
+        with col_male:
+            st.markdown("**Male**")
+        with col_female:
+            st.markdown("**Female**")
+
+        # Viewed
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("Viewed")
+        with col_combined:
+            st.metric("", f"{stats_combined['viewed']:,}", f"{stats_combined['view_rate']:.1f}%", label_visibility="collapsed")
+        with col_male:
+            st.metric("", f"{stats_male['viewed']:,}", f"{stats_male['view_rate']:.1f}%", label_visibility="collapsed")
+        with col_female:
+            st.metric("", f"{stats_female['viewed']:,}", f"{stats_female['view_rate']:.1f}%", label_visibility="collapsed")
+
+        # Mutual Matches
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("Mutual Matches")
+        with col_combined:
+            st.metric("", f"{stats_combined['mutual']:,}", f"{stats_combined['mutual_rate']:.1f}%", label_visibility="collapsed")
+        with col_male:
+            st.metric("", f"{stats_male['mutual']:,}", f"{stats_male['mutual_rate']:.1f}%", label_visibility="collapsed")
+        with col_female:
+            st.metric("", f"{stats_female['mutual']:,}", f"{stats_female['mutual_rate']:.1f}%", label_visibility="collapsed")
+
+        # Avg Mutual Score
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("Avg Mutual Score")
+        with col_combined:
+            st.metric("", f"{stats_combined['avg_mutual']:.2f}" if pd.notna(stats_combined['avg_mutual']) else "N/A", label_visibility="collapsed")
+        with col_male:
+            st.metric("", f"{stats_male['avg_mutual']:.2f}" if pd.notna(stats_male['avg_mutual']) else "N/A", label_visibility="collapsed")
+        with col_female:
+            st.metric("", f"{stats_female['avg_mutual']:.2f}" if pd.notna(stats_female['avg_mutual']) else "N/A", label_visibility="collapsed")
+
+        # Avg Know More
+        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+        with col_label:
+            st.markdown("Avg Know More")
+        with col_combined:
+            st.metric("", f"{stats_combined['avg_know']:.1f}" if pd.notna(stats_combined['avg_know']) else "N/A", label_visibility="collapsed")
+        with col_male:
+            st.metric("", f"{stats_male['avg_know']:.1f}" if pd.notna(stats_male['avg_know']) else "N/A", label_visibility="collapsed")
+        with col_female:
+            st.metric("", f"{stats_female['avg_know']:.1f}" if pd.notna(stats_female['avg_know']) else "N/A", label_visibility="collapsed")
 
         st.divider()
 
-        # Row 2: Engagement metrics
-        col5, col6, col7, col8 = st.columns(4)
-
-        with col5:
-            viewed_count = df['is_viewed'].sum() if 'is_viewed' in df.columns else 0
-            view_rate = (viewed_count / total_count * 100) if total_count > 0 else 0
-            st.metric("Viewed", f"{int(viewed_count):,}", f"{view_rate:.1f}%")
-
-        with col6:
-            mutual_count = df['is_mutual'].sum() if 'is_mutual' in df.columns else 0
-            mutual_rate = (mutual_count / total_count * 100) if total_count > 0 else 0
-            st.metric("Mutual Matches", f"{int(mutual_count):,}", f"{mutual_rate:.1f}%")
-
-        with col7:
-            avg_mutual_score = df['mutual_score'].dropna().mean()
-            st.metric("Avg Mutual Score", f"{avg_mutual_score:.2f}" if pd.notna(avg_mutual_score) else "N/A")
-
-        with col8:
-            avg_know_more = df['know_more_count'].dropna().mean()
-            st.metric("Avg Know More", f"{avg_know_more:.1f}" if pd.notna(avg_know_more) else "N/A")
-
-        st.divider()
-
-        # Row 3: Mutual Likes calculation (A liked B AND B liked A)
-        st.subheader("Mutual Likes Analysis")
+        # Mutual Likes calculation (A liked B AND B liked A)
+        st.markdown("### Mutual Likes Analysis")
 
         # Get all likes
         likes_df = df[df['is_liked'] == 'liked'][['current_user_id', 'matched_user_id']].copy()
 
         # Find mutual likes: where (A->B) exists AND (B->A) exists
-        # Create a set of (user1, user2) pairs where user1 liked user2
         like_pairs = set(zip(likes_df['current_user_id'], likes_df['matched_user_id']))
 
-        # Count mutual likes (both directions exist)
-        mutual_like_count = 0
         mutual_pairs = set()
         for curr, matched in like_pairs:
             if (matched, curr) in like_pairs:
-                # Add as sorted tuple to avoid counting twice
                 pair = tuple(sorted([curr, matched]))
                 mutual_pairs.add(pair)
 
         mutual_like_count = len(mutual_pairs)
+        liked_count = stats_combined['liked']
 
         col_ml1, col_ml2 = st.columns(2)
         with col_ml1:
@@ -420,37 +523,6 @@ with tab_overview:
         with col_ml2:
             mutual_like_rate = (mutual_like_count / (liked_count / 2) * 100) if liked_count > 0 else 0
             st.metric("Mutual Like Rate", f"{mutual_like_rate:.1f}%")
-
-        st.divider()
-
-        # Row 4: Gender-based likes
-        st.subheader("Likes by Gender")
-
-        likes_only = df[df['is_liked'] == 'liked']
-
-        col_g1, col_g2, col_g3, col_g4 = st.columns(4)
-
-        with col_g1:
-            male_likes = len(likes_only[likes_only['sender_gender'] == 'male'])
-            male_like_rate = (male_likes / liked_count * 100) if liked_count > 0 else 0
-            st.metric("Likes from Males", f"{male_likes:,}", f"{male_like_rate:.1f}%")
-
-        with col_g2:
-            female_likes = len(likes_only[likes_only['sender_gender'] == 'female'])
-            female_like_rate = (female_likes / liked_count * 100) if liked_count > 0 else 0
-            st.metric("Likes from Females", f"{female_likes:,}", f"{female_like_rate:.1f}%")
-
-        with col_g3:
-            # Male like rate (likes / total matches shown to males)
-            male_total = len(df[df['sender_gender'] == 'male'])
-            male_engagement = (male_likes / male_total * 100) if male_total > 0 else 0
-            st.metric("Male Like Rate", f"{male_engagement:.1f}%", f"of {male_total:,} shown")
-
-        with col_g4:
-            # Female like rate (likes / total matches shown to females)
-            female_total = len(df[df['sender_gender'] == 'female'])
-            female_engagement = (female_likes / female_total * 100) if female_total > 0 else 0
-            st.metric("Female Like Rate", f"{female_engagement:.1f}%", f"of {female_total:,} shown")
 
         st.divider()
 
@@ -703,7 +775,167 @@ with tab_mutual:
                     st.markdown(f"**Mutual Score:** {pair['mutual_score']} | **Phase:** {pair['origin_phase']} | **Date:** {pair['created_at']}")
 
 
-# --- Tab 4: Trends ---
+# --- Tab 4: Male Likes ---
+with tab_male_likes:
+    st.subheader("Males Who Received Likes")
+    st.markdown("List of males sorted by number of likes received")
+
+    # Fetch data with filters
+    male_likes_data_raw = fetch_overview_stats(
+        run_id=run_id_filter,
+        origin_phase=phase_filter,
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    if not male_likes_data_raw:
+        st.info("No matches found for the selected filters.")
+    else:
+        df_male_likes = pd.DataFrame(male_likes_data_raw)
+
+        # Get all likes where matched_user is male
+        # matched_user_id is the person who RECEIVED the like
+        likes_received = df_male_likes[df_male_likes['is_liked'] == 'liked'][['matched_user_id']].copy()
+
+        if len(likes_received) > 0:
+            # Count likes per matched_user
+            likes_count = likes_received.groupby('matched_user_id').size().reset_index(name='likes_received')
+            likes_count = likes_count.sort_values('likes_received', ascending=False)
+
+            # Get all matched_user_ids
+            matched_user_ids = likes_count['matched_user_id'].tolist()
+
+            # Fetch gender for all matched users
+            with st.spinner("Loading user data..."):
+                matched_genders = fetch_user_genders(matched_user_ids)
+
+            # Filter to only males
+            male_user_ids = [uid for uid in matched_user_ids if matched_genders.get(uid) == 'male']
+
+            if male_user_ids:
+                # Fetch profiles and contact info for males
+                male_profiles = fetch_user_profiles_batch(male_user_ids)
+                male_emails, male_phones = fetch_user_contact_batch(male_user_ids)
+
+                # Build display data
+                male_likes_data = []
+                for uid in male_user_ids:
+                    like_count = likes_count[likes_count['matched_user_id'] == uid]['likes_received'].values[0]
+                    profile = male_profiles.get(uid, {})
+                    male_likes_data.append({
+                        'user_id': uid,
+                        'name': profile.get('name', 'Unknown'),
+                        'likes': like_count,
+                        'phone': male_phones.get(uid, 'N/A'),
+                        'email': male_emails.get(uid, 'N/A'),
+                        'photos': profile.get('profile_images') or profile.get('instagram_images') or []
+                    })
+
+                st.metric("Total Males with Likes", len(male_likes_data))
+                st.divider()
+
+                # Display each male with likes
+                for i, male in enumerate(male_likes_data[:50]):  # Limit to top 50
+                    with st.expander(f"#{i+1}: {male['name']} - {male['likes']} likes"):
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            if male['photos']:
+                                st.image(male['photos'][0], width=150)
+                            else:
+                                st.markdown("No photo")
+                        with col2:
+                            st.markdown(f"**Name:** {male['name']}")
+                            st.markdown(f"**Likes Received:** {male['likes']}")
+                            st.markdown(f"**Phone:** {male['phone']}")
+                            st.markdown(f"**Email:** {male['email']}")
+                            st.markdown(f"**User ID:** `{male['user_id']}`")
+            else:
+                st.info("No males received likes in the selected date range.")
+        else:
+            st.info("No likes found in the selected date range.")
+
+
+# --- Tab 5: Female Likes ---
+with tab_female_likes:
+    st.subheader("Females Who Received Likes")
+    st.markdown("List of females sorted by number of likes received")
+
+    # Fetch data with filters
+    female_likes_data_raw = fetch_overview_stats(
+        run_id=run_id_filter,
+        origin_phase=phase_filter,
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    if not female_likes_data_raw:
+        st.info("No matches found for the selected filters.")
+    else:
+        df_female_likes = pd.DataFrame(female_likes_data_raw)
+
+        # Get all likes where matched_user is female
+        # matched_user_id is the person who RECEIVED the like
+        likes_received_f = df_female_likes[df_female_likes['is_liked'] == 'liked'][['matched_user_id']].copy()
+
+        if len(likes_received_f) > 0:
+            # Count likes per matched_user
+            likes_count_f = likes_received_f.groupby('matched_user_id').size().reset_index(name='likes_received')
+            likes_count_f = likes_count_f.sort_values('likes_received', ascending=False)
+
+            # Get all matched_user_ids
+            matched_user_ids_f = likes_count_f['matched_user_id'].tolist()
+
+            # Fetch gender for all matched users
+            with st.spinner("Loading user data..."):
+                matched_genders_f = fetch_user_genders(matched_user_ids_f)
+
+            # Filter to only females
+            female_user_ids = [uid for uid in matched_user_ids_f if matched_genders_f.get(uid) == 'female']
+
+            if female_user_ids:
+                # Fetch profiles and contact info for females
+                female_profiles = fetch_user_profiles_batch(female_user_ids)
+                female_emails, female_phones = fetch_user_contact_batch(female_user_ids)
+
+                # Build display data
+                female_likes_data = []
+                for uid in female_user_ids:
+                    like_count = likes_count_f[likes_count_f['matched_user_id'] == uid]['likes_received'].values[0]
+                    profile = female_profiles.get(uid, {})
+                    female_likes_data.append({
+                        'user_id': uid,
+                        'name': profile.get('name', 'Unknown'),
+                        'likes': like_count,
+                        'phone': female_phones.get(uid, 'N/A'),
+                        'email': female_emails.get(uid, 'N/A'),
+                        'photos': profile.get('profile_images') or profile.get('instagram_images') or []
+                    })
+
+                st.metric("Total Females with Likes", len(female_likes_data))
+                st.divider()
+
+                # Display each female with likes
+                for i, female in enumerate(female_likes_data[:50]):  # Limit to top 50
+                    with st.expander(f"#{i+1}: {female['name']} - {female['likes']} likes"):
+                        col1, col2 = st.columns([1, 3])
+                        with col1:
+                            if female['photos']:
+                                st.image(female['photos'][0], width=150)
+                            else:
+                                st.markdown("No photo")
+                        with col2:
+                            st.markdown(f"**Name:** {female['name']}")
+                            st.markdown(f"**Likes Received:** {female['likes']}")
+                            st.markdown(f"**Phone:** {female['phone']}")
+                            st.markdown(f"**Email:** {female['email']}")
+                            st.markdown(f"**User ID:** `{female['user_id']}`")
+            else:
+                st.info("No females received likes in the selected date range.")
+        else:
+            st.info("No likes found in the selected date range.")
+
+
+# --- Tab 6: Trends ---
 with tab_trends:
     st.subheader("Match Trends Over Time")
 
