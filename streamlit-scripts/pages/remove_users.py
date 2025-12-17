@@ -83,7 +83,8 @@ def fetch_users_to_review(after_date=None):
         # Fetch all users and filter in Python since Supabase doesn't support OR with NULL easily
         query = supabase.table('user_metadata').select(
             'user_id, name, city, area, work_exp, education, interesting_facts, religion, '
-            'profile_images, collage_images, instagram_images, "shouldBeRemoved", "hasAppropriatePhotos", created_at'
+            'profile_images, collage_images, instagram_images, "shouldBeRemoved", "hasAppropriatePhotos", created_at, '
+            'gender, professional_tier, attractiveness, age'
         )
 
         # Add date filter if provided
@@ -165,19 +166,86 @@ if 'remove_users_list' not in st.session_state:
 if 'remove_refresh_trigger' not in st.session_state:
     st.session_state.remove_refresh_trigger = 0
 
-# --- Date Filter ---
-st.sidebar.header("Filter by Date")
+# --- Filters ---
+st.sidebar.header("Filters")
+
+# Date filter
 filter_date = st.sidebar.date_input(
-    "Show users created after",
+    "Created after",
     value=None,
     key="filter_date"
 )
+
+# Gender filter
+gender_options = ["All", "male", "female"]
+filter_gender = st.sidebar.selectbox(
+    "Gender",
+    options=gender_options,
+    key="filter_gender"
+)
+
+# Professional tier filter
+tier_options = ["All", "1", "2", "3", "Not Set"]
+filter_tier = st.sidebar.selectbox(
+    "Professional Tier",
+    options=tier_options,
+    key="filter_tier"
+)
+
+# Attractiveness score filter
+attractiveness_options = ["All", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "Not Rated"]
+filter_attractiveness = st.sidebar.selectbox(
+    "Attractiveness Score",
+    options=attractiveness_options,
+    key="filter_attractiveness"
+)
+
+# Location filter (city) - will be populated dynamically
+# First fetch all users to get unique cities
+all_users_for_cities = fetch_users_to_review(after_date=filter_date)
+unique_cities = sorted(set(u.get('city') for u in all_users_for_cities if u.get('city')))
+city_options = ["All"] + unique_cities
+filter_city = st.sidebar.selectbox(
+    "City",
+    options=city_options,
+    key="filter_city"
+)
+
+# Age filter
+col_age1, col_age2 = st.sidebar.columns(2)
+with col_age1:
+    filter_age_min = st.number_input("Min Age", min_value=18, max_value=100, value=18, key="filter_age_min")
+with col_age2:
+    filter_age_max = st.number_input("Max Age", min_value=18, max_value=100, value=100, key="filter_age_max")
 
 st.sidebar.divider()
 
 # --- Load Users ---
 # Reload when refresh_trigger changes
 users = fetch_users_to_review(after_date=filter_date)
+
+# Apply filters
+if filter_gender != "All":
+    users = [u for u in users if u.get('gender') == filter_gender]
+
+if filter_tier != "All":
+    if filter_tier == "Not Set":
+        users = [u for u in users if u.get('professional_tier') is None]
+    else:
+        users = [u for u in users if u.get('professional_tier') == int(filter_tier)]
+
+if filter_attractiveness != "All":
+    if filter_attractiveness == "Not Rated":
+        users = [u for u in users if u.get('attractiveness') is None]
+    else:
+        users = [u for u in users if u.get('attractiveness') == int(filter_attractiveness)]
+
+if filter_city != "All":
+    users = [u for u in users if u.get('city') == filter_city]
+
+# Age filter
+users = [u for u in users if u.get('age') is None or (filter_age_min <= (u.get('age') or 0) <= filter_age_max)]
+
 st.session_state.remove_users_list = users
 
 # --- Search by User ID ---
@@ -286,8 +354,27 @@ with col_action2:
 st.divider()
 
 # --- User Profile Display ---
-# Name
+# Name and basic info
 st.header(current_user.get('name') or 'Unknown Name')
+
+# Display key info in a row
+gender = current_user.get('gender') or 'N/A'
+age = current_user.get('age')
+tier = current_user.get('professional_tier')
+attractiveness = current_user.get('attractiveness')
+
+info_parts = []
+if gender != 'N/A':
+    info_parts.append(f"**Gender:** {gender}")
+if age:
+    info_parts.append(f"**Age:** {age}")
+if tier:
+    info_parts.append(f"**Tier:** {tier}")
+if attractiveness:
+    info_parts.append(f"**Attractiveness:** {attractiveness}/10")
+
+if info_parts:
+    st.markdown(" | ".join(info_parts))
 
 if is_removed:
     st.error("This user is marked for removal")
