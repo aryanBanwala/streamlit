@@ -318,7 +318,7 @@ if run_id_filter != st.session_state.ms_last_run_id or phase_filter != st.sessio
 st.title("Match Stats")
 
 # Tabs
-tab_overview, tab_user, tab_mutual, tab_male_likes, tab_female_likes, tab_trends = st.tabs(["Overview", "User Search", "Mutual Likes", "Male Likes", "Female Likes", "Trends"])
+tab_overview, tab_funnel, tab_user, tab_mutual, tab_male_likes, tab_female_likes, tab_trends = st.tabs(["Overview", "Funnel", "User Search", "Mutual Likes", "Male Likes", "Female Likes", "Trends"])
 
 
 # --- Tab 1: Overview ---
@@ -546,7 +546,354 @@ with tab_overview:
         )
 
 
-# --- Tab 2: User Search ---
+# --- Tab 2: Funnel ---
+with tab_funnel:
+    st.subheader("User Journey Funnel")
+    st.markdown("Breakdown of user actions from recommendations to final decisions")
+
+    # Fetch data with filters
+    funnel_data = fetch_overview_stats(
+        run_id=run_id_filter,
+        origin_phase=phase_filter,
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    if not funnel_data:
+        st.info("No matches found for the selected filters.")
+    else:
+        df_funnel = pd.DataFrame(funnel_data)
+
+        # Fetch gender data for all current_user_ids (the person who received the recommendation)
+        all_funnel_user_ids = list(set(df_funnel['current_user_id'].tolist()))
+        with st.spinner("Loading gender data..."):
+            funnel_gender_map = fetch_user_genders(all_funnel_user_ids)
+
+        # Add gender column
+        df_funnel['user_gender'] = df_funnel['current_user_id'].map(funnel_gender_map)
+
+        # Split by gender
+        df_funnel_male = df_funnel[df_funnel['user_gender'] == 'male']
+        df_funnel_female = df_funnel[df_funnel['user_gender'] == 'female']
+
+        def calc_funnel_stats(data, gender_label):
+            """Calculate funnel statistics for a given dataset."""
+            total = len(data)
+            if total == 0:
+                return None
+
+            # Unique users (current_user_id = person who received recommendation)
+            unique_users = data['current_user_id'].nunique()
+
+            # Viewed = is_viewed is True
+            viewed = int(data['is_viewed'].sum()) if 'is_viewed' in data.columns else 0
+            not_viewed = total - viewed
+
+            # Unique users who viewed at least one recommendation
+            users_who_viewed = data[data['is_viewed'] == True]['current_user_id'].nunique() if 'is_viewed' in data.columns else 0
+
+            # Actions
+            liked = len(data[data['is_liked'] == 'liked'])
+            disliked = len(data[data['is_liked'] == 'disliked'])
+            passed = len(data[data['is_liked'] == 'passed'])
+
+            # Unique users who took each action
+            users_who_liked = data[data['is_liked'] == 'liked']['current_user_id'].nunique()
+            users_who_disliked = data[data['is_liked'] == 'disliked']['current_user_id'].nunique()
+            users_who_passed = data[data['is_liked'] == 'passed']['current_user_id'].nunique()
+
+            # No action = not liked, disliked, or passed (is_liked is null or empty)
+            actioned = liked + disliked + passed
+            no_action = total - actioned
+
+            # Unique users who took any action
+            users_with_action = data[data['is_liked'].isin(['liked', 'disliked', 'passed'])]['current_user_id'].nunique()
+            users_no_action = unique_users - users_with_action
+
+            # Know more (clicked to see more details)
+            know_more_clicked = len(data[data['know_more_count'] > 0]) if 'know_more_count' in data.columns else 0
+            users_know_more = data[data['know_more_count'] > 0]['current_user_id'].nunique() if 'know_more_count' in data.columns else 0
+
+            # Mutual matches
+            mutual = int(data['is_mutual'].sum()) if 'is_mutual' in data.columns else 0
+
+            # Profile view distribution (how many profiles each user viewed out of 9)
+            # Count views per user
+            if 'is_viewed' in data.columns:
+                views_per_user = data[data['is_viewed'] == True].groupby('current_user_id').size()
+                users_viewed_1_3 = len(views_per_user[(views_per_user >= 1) & (views_per_user <= 3)])
+                users_viewed_4_6 = len(views_per_user[(views_per_user >= 4) & (views_per_user <= 6)])
+                users_viewed_7_9 = len(views_per_user[(views_per_user >= 7) & (views_per_user <= 9)])
+            else:
+                users_viewed_1_3 = 0
+                users_viewed_4_6 = 0
+                users_viewed_7_9 = 0
+
+            return {
+                'gender': gender_label,
+                'total_recommendations': total,
+                'unique_users': unique_users,
+                'avg_recs_per_user': (total / unique_users) if unique_users > 0 else 0,
+                'viewed': viewed,
+                'viewed_rate': (viewed / total * 100) if total > 0 else 0,
+                'users_who_viewed': users_who_viewed,
+                'users_viewed_rate': (users_who_viewed / unique_users * 100) if unique_users > 0 else 0,
+                'not_viewed': not_viewed,
+                'not_viewed_rate': (not_viewed / total * 100) if total > 0 else 0,
+                'any_action': actioned,
+                'any_action_rate': (actioned / total * 100) if total > 0 else 0,
+                'users_with_action': users_with_action,
+                'users_action_rate': (users_with_action / unique_users * 100) if unique_users > 0 else 0,
+                'no_action': no_action,
+                'no_action_rate': (no_action / total * 100) if total > 0 else 0,
+                'users_no_action': users_no_action,
+                'liked': liked,
+                'liked_rate': (liked / total * 100) if total > 0 else 0,
+                'users_who_liked': users_who_liked,
+                'users_liked_rate': (users_who_liked / unique_users * 100) if unique_users > 0 else 0,
+                'liked_of_actioned': (liked / actioned * 100) if actioned > 0 else 0,
+                'disliked': disliked,
+                'disliked_rate': (disliked / total * 100) if total > 0 else 0,
+                'users_who_disliked': users_who_disliked,
+                'passed': passed,
+                'passed_rate': (passed / total * 100) if total > 0 else 0,
+                'users_who_passed': users_who_passed,
+                'know_more': know_more_clicked,
+                'know_more_rate': (know_more_clicked / total * 100) if total > 0 else 0,
+                'users_know_more': users_know_more,
+                'mutual': mutual,
+                'mutual_rate': (mutual / total * 100) if total > 0 else 0,
+                'conversion_rate': (liked / total * 100) if total > 0 else 0,
+                'users_viewed_1_3': users_viewed_1_3,
+                'users_viewed_4_6': users_viewed_4_6,
+                'users_viewed_7_9': users_viewed_7_9,
+            }
+
+        # Calculate stats for both genders
+        male_funnel = calc_funnel_stats(df_funnel_male, "Male")
+        female_funnel = calc_funnel_stats(df_funnel_female, "Female")
+
+        # Display funnel as flow chart
+        def display_funnel_chart(stats, gender_label, color):
+            """Display funnel as a visual flow chart."""
+            if stats is None:
+                st.info(f"No data for {gender_label} users")
+                return
+
+            # CSS for funnel boxes
+            st.markdown(f"""
+            <style>
+            .funnel-box {{
+                background: linear-gradient(135deg, {color}22, {color}11);
+                border-left: 4px solid {color};
+                border-radius: 8px;
+                padding: 15px;
+                margin: 8px 0;
+                text-align: center;
+            }}
+            .funnel-box h3 {{
+                margin: 0 0 5px 0;
+                font-size: 24px;
+                color: {color};
+            }}
+            .funnel-box p {{
+                margin: 0;
+                font-size: 14px;
+                color: #888;
+            }}
+            .funnel-arrow {{
+                text-align: center;
+                font-size: 24px;
+                color: #555;
+                margin: 5px 0;
+            }}
+            .funnel-split {{
+                display: flex;
+                justify-content: space-around;
+                gap: 10px;
+            }}
+            .funnel-split-box {{
+                flex: 1;
+                background: #1a1a2e;
+                border-radius: 8px;
+                padding: 12px;
+                text-align: center;
+            }}
+            .funnel-split-box.green {{ border-left: 3px solid #4CAF50; }}
+            .funnel-split-box.red {{ border-left: 3px solid #f44336; }}
+            .funnel-split-box.yellow {{ border-left: 3px solid #ff9800; }}
+            .funnel-split-box.blue {{ border-left: 3px solid #2196F3; }}
+            </style>
+            """, unsafe_allow_html=True)
+
+            # Title
+            st.markdown(f"### {gender_label} Funnel")
+
+            # Stage 1: Users
+            st.markdown(f"""
+            <div class="funnel-box">
+                <h3>{stats['unique_users']:,}</h3>
+                <p>Unique Users</p>
+                <p style="font-size:12px; color:#666;">({stats['total_recommendations']:,} recommendations, ~{stats['avg_recs_per_user']:.1f}/user)</p>
+            </div>
+            <div class="funnel-arrow">↓</div>
+            """, unsafe_allow_html=True)
+
+            # Stage 2: Viewed
+            viewed_pct = stats['users_viewed_rate']
+            st.markdown(f"""
+            <div class="funnel-box">
+                <h3>{stats['users_who_viewed']:,}</h3>
+                <p>Users Viewed ({viewed_pct:.1f}%)</p>
+                <p style="font-size:12px; color:#666;">({stats['viewed']:,} views)</p>
+            </div>
+            <div class="funnel-arrow">↓</div>
+            """, unsafe_allow_html=True)
+
+            # Stage 3: Took Action
+            action_pct = stats['users_action_rate']
+            st.markdown(f"""
+            <div class="funnel-box">
+                <h3>{stats['users_with_action']:,}</h3>
+                <p>Users Took Action ({action_pct:.1f}%)</p>
+                <p style="font-size:12px; color:#666;">({stats['any_action']:,} actions)</p>
+            </div>
+            <div class="funnel-arrow">↓</div>
+            """, unsafe_allow_html=True)
+
+            # Stage 4: Action breakdown (side by side)
+            st.markdown(f"""
+            <div class="funnel-split">
+                <div class="funnel-split-box green">
+                    <h4 style="color:#4CAF50; margin:0;">{stats['users_who_liked']:,}</h4>
+                    <p style="margin:0; font-size:13px;">Liked</p>
+                    <p style="margin:0; font-size:11px; color:#666;">{stats['liked']:,} likes ({stats['liked_rate']:.1f}%)</p>
+                </div>
+                <div class="funnel-split-box red">
+                    <h4 style="color:#f44336; margin:0;">{stats['users_who_disliked']:,}</h4>
+                    <p style="margin:0; font-size:13px;">Disliked</p>
+                    <p style="margin:0; font-size:11px; color:#666;">{stats['disliked']:,} dislikes ({stats['disliked_rate']:.1f}%)</p>
+                </div>
+                <div class="funnel-split-box yellow">
+                    <h4 style="color:#ff9800; margin:0;">{stats['users_who_passed']:,}</h4>
+                    <p style="margin:0; font-size:13px;">Passed</p>
+                    <p style="margin:0; font-size:11px; color:#666;">{stats['passed']:,} passes ({stats['passed_rate']:.1f}%)</p>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+
+            # Summary metrics
+            st.markdown("---")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Conversion Rate", f"{stats['conversion_rate']:.1f}%")
+            with c2:
+                st.metric("Users No Action", f"{stats['users_no_action']:,}")
+            with c3:
+                st.metric("Know More", f"{stats['users_know_more']:,}")
+
+            # Profile View Distribution (out of 9)
+            st.markdown("##### Profiles Viewed (out of 9)")
+            v1, v2, v3 = st.columns(3)
+            with v1:
+                st.metric("1-3 Profiles", f"{stats['users_viewed_1_3']:,}")
+            with v2:
+                st.metric("4-6 Profiles", f"{stats['users_viewed_4_6']:,}")
+            with v3:
+                st.metric("7-9 Profiles", f"{stats['users_viewed_7_9']:,}")
+
+        # Display both funnels side by side
+        col_male, col_female = st.columns(2)
+
+        with col_male:
+            display_funnel_chart(male_funnel, "Male", "#2196F3")
+
+        with col_female:
+            display_funnel_chart(female_funnel, "Female", "#E91E63")
+
+        st.divider()
+
+        # Comparison Table
+        st.subheader("Side-by-Side Comparison")
+
+        if male_funnel and female_funnel:
+            comparison_data = {
+                'Metric': [
+                    'Total Recommendations',
+                    'Unique Users',
+                    'Avg Recs/User',
+                    'Viewed (recs)',
+                    'Users Viewed',
+                    'Viewed Rate',
+                    'Took Action (recs)',
+                    'Users Took Action',
+                    'Action Rate',
+                    'No Action (recs)',
+                    'Liked (recs)',
+                    'Users Liked',
+                    'Like Rate',
+                    'Disliked (recs)',
+                    'Passed (recs)',
+                    'Know More (recs)',
+                    'Mutual Matches',
+                    'Conversion Rate',
+                    'Viewed 1-3 Profiles',
+                    'Viewed 4-6 Profiles',
+                    'Viewed 7-9 Profiles'
+                ],
+                'Male': [
+                    f"{male_funnel['total_recommendations']:,}",
+                    f"{male_funnel['unique_users']:,}",
+                    f"{male_funnel['avg_recs_per_user']:.1f}",
+                    f"{male_funnel['viewed']:,}",
+                    f"{male_funnel['users_who_viewed']:,}",
+                    f"{male_funnel['viewed_rate']:.1f}%",
+                    f"{male_funnel['any_action']:,}",
+                    f"{male_funnel['users_with_action']:,}",
+                    f"{male_funnel['any_action_rate']:.1f}%",
+                    f"{male_funnel['no_action']:,}",
+                    f"{male_funnel['liked']:,}",
+                    f"{male_funnel['users_who_liked']:,}",
+                    f"{male_funnel['liked_rate']:.1f}%",
+                    f"{male_funnel['disliked']:,}",
+                    f"{male_funnel['passed']:,}",
+                    f"{male_funnel['know_more']:,}",
+                    f"{male_funnel['mutual']:,}",
+                    f"{male_funnel['conversion_rate']:.1f}%",
+                    f"{male_funnel['users_viewed_1_3']:,}",
+                    f"{male_funnel['users_viewed_4_6']:,}",
+                    f"{male_funnel['users_viewed_7_9']:,}"
+                ],
+                'Female': [
+                    f"{female_funnel['total_recommendations']:,}",
+                    f"{female_funnel['unique_users']:,}",
+                    f"{female_funnel['avg_recs_per_user']:.1f}",
+                    f"{female_funnel['viewed']:,}",
+                    f"{female_funnel['users_who_viewed']:,}",
+                    f"{female_funnel['viewed_rate']:.1f}%",
+                    f"{female_funnel['any_action']:,}",
+                    f"{female_funnel['users_with_action']:,}",
+                    f"{female_funnel['any_action_rate']:.1f}%",
+                    f"{female_funnel['no_action']:,}",
+                    f"{female_funnel['liked']:,}",
+                    f"{female_funnel['users_who_liked']:,}",
+                    f"{female_funnel['liked_rate']:.1f}%",
+                    f"{female_funnel['disliked']:,}",
+                    f"{female_funnel['passed']:,}",
+                    f"{female_funnel['know_more']:,}",
+                    f"{female_funnel['mutual']:,}",
+                    f"{female_funnel['conversion_rate']:.1f}%",
+                    f"{female_funnel['users_viewed_1_3']:,}",
+                    f"{female_funnel['users_viewed_4_6']:,}",
+                    f"{female_funnel['users_viewed_7_9']:,}"
+                ]
+            }
+
+            comparison_df = pd.DataFrame(comparison_data)
+            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+
+
+# --- Tab 3: User Search ---
 with tab_user:
     st.subheader("User Match History")
 
