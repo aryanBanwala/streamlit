@@ -629,6 +629,15 @@ with tab_funnel:
                 users_viewed_4_6 = 0
                 users_viewed_7_9 = 0
 
+            # Recommendations distribution (how many matches/recommendations each user received)
+            recs_per_user = data.groupby('current_user_id').size()
+            min_recs = int(recs_per_user.min()) if len(recs_per_user) > 0 else 0
+            max_recs = int(recs_per_user.max()) if len(recs_per_user) > 0 else 0
+            median_recs = float(recs_per_user.median()) if len(recs_per_user) > 0 else 0
+            users_with_lt_9 = len(recs_per_user[recs_per_user < 9])
+            users_with_9 = len(recs_per_user[recs_per_user == 9])
+            users_with_gt_9 = len(recs_per_user[recs_per_user > 9])
+
             return {
                 'gender': gender_label,
                 'total_recommendations': total,
@@ -667,6 +676,12 @@ with tab_funnel:
                 'users_viewed_1_3': users_viewed_1_3,
                 'users_viewed_4_6': users_viewed_4_6,
                 'users_viewed_7_9': users_viewed_7_9,
+                'min_recs': min_recs,
+                'max_recs': max_recs,
+                'median_recs': median_recs,
+                'users_with_lt_9': users_with_lt_9,
+                'users_with_9': users_with_9,
+                'users_with_gt_9': users_with_gt_9,
             }
 
         # Calculate stats for both genders
@@ -802,6 +817,24 @@ with tab_funnel:
             with v3:
                 st.metric("7-9 Profiles", f"{stats['users_viewed_7_9']:,}")
 
+            # Recommendations Distribution (how many matches each user received)
+            st.markdown("##### Recommendations per User")
+            r1, r2, r3 = st.columns(3)
+            with r1:
+                st.metric("Min/Max", f"{stats['min_recs']} / {stats['max_recs']}")
+            with r2:
+                st.metric("Median", f"{stats['median_recs']:.0f}")
+            with r3:
+                st.metric("Avg", f"{stats['avg_recs_per_user']:.1f}")
+
+            r4, r5, r6 = st.columns(3)
+            with r4:
+                st.metric("< 9 Recs", f"{stats['users_with_lt_9']:,}")
+            with r5:
+                st.metric("= 9 Recs", f"{stats['users_with_9']:,}")
+            with r6:
+                st.metric("> 9 Recs", f"{stats['users_with_gt_9']:,}")
+
         # Display both funnels side by side
         col_male, col_female = st.columns(2)
 
@@ -839,7 +872,13 @@ with tab_funnel:
                     'Conversion Rate',
                     'Viewed 1-3 Profiles',
                     'Viewed 4-6 Profiles',
-                    'Viewed 7-9 Profiles'
+                    'Viewed 7-9 Profiles',
+                    'Min Recs/User',
+                    'Max Recs/User',
+                    'Median Recs/User',
+                    'Users < 9 Recs',
+                    'Users = 9 Recs',
+                    'Users > 9 Recs'
                 ],
                 'Male': [
                     f"{male_funnel['total_recommendations']:,}",
@@ -862,7 +901,13 @@ with tab_funnel:
                     f"{male_funnel['conversion_rate']:.1f}%",
                     f"{male_funnel['users_viewed_1_3']:,}",
                     f"{male_funnel['users_viewed_4_6']:,}",
-                    f"{male_funnel['users_viewed_7_9']:,}"
+                    f"{male_funnel['users_viewed_7_9']:,}",
+                    f"{male_funnel['min_recs']}",
+                    f"{male_funnel['max_recs']}",
+                    f"{male_funnel['median_recs']:.0f}",
+                    f"{male_funnel['users_with_lt_9']:,}",
+                    f"{male_funnel['users_with_9']:,}",
+                    f"{male_funnel['users_with_gt_9']:,}"
                 ],
                 'Female': [
                     f"{female_funnel['total_recommendations']:,}",
@@ -885,7 +930,13 @@ with tab_funnel:
                     f"{female_funnel['conversion_rate']:.1f}%",
                     f"{female_funnel['users_viewed_1_3']:,}",
                     f"{female_funnel['users_viewed_4_6']:,}",
-                    f"{female_funnel['users_viewed_7_9']:,}"
+                    f"{female_funnel['users_viewed_7_9']:,}",
+                    f"{female_funnel['min_recs']}",
+                    f"{female_funnel['max_recs']}",
+                    f"{female_funnel['median_recs']:.0f}",
+                    f"{female_funnel['users_with_lt_9']:,}",
+                    f"{female_funnel['users_with_9']:,}",
+                    f"{female_funnel['users_with_gt_9']:,}"
                 ]
             }
 
