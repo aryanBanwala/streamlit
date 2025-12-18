@@ -109,12 +109,14 @@ def update_profile_images(user_id: str, images: list) -> bool:
         return False
 
 
-def update_collage_images(user_id: str, images: list) -> bool:
-    """Update collage_images array in database"""
+def update_collage_images(user_id: str, images: list, clear_status: bool = False) -> bool:
+    """Update collage_images array in database. If clear_status=True, also clears collage_creation_status and message."""
     try:
-        supabase.table('user_metadata').update({
-            'collage_images': images
-        }).eq('user_id', user_id).execute()
+        update_data = {'collage_images': images}
+        if clear_status:
+            update_data['collage_creation_status'] = None
+            update_data['collage_creation_message'] = None
+        supabase.table('user_metadata').update(update_data).eq('user_id', user_id).execute()
         return True
     except Exception as e:
         st.error(f"Failed to update collage images: {e}")
@@ -280,7 +282,7 @@ if user_data:
             if st.button("Delete Collage", key="del_collage"):
                 with st.spinner("Deleting..."):
                     delete_from_storage(current_collage)
-                    if update_collage_images(user_id, []):
+                    if update_collage_images(user_id, [], clear_status=True):
                         st.success("Collage deleted!")
                         st.session_state.image_manager_user_data = fetch_user_by_id(user_id)
                         st.rerun()
