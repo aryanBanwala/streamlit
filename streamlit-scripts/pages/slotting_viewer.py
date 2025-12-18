@@ -585,15 +585,32 @@ elif recommended_search.strip():
             st.divider()
 
 else:
-    # Default: Show paginated list of all users
-    st.info(f"Total users: {total_users}")
+    # Gender filter
+    filter_col1, filter_col2 = st.columns([1, 4])
+    with filter_col1:
+        gender_filter = st.selectbox("Filter by Gender", ["All", "Male", "Female"], key="gender_filter")
+
+    # Filter users by gender
+    if gender_filter == "Male":
+        filtered_user_ids = [uid for uid in all_user_ids if recommendations_by_user.get(uid, {}).get('gender') == 'male']
+    elif gender_filter == "Female":
+        filtered_user_ids = [uid for uid in all_user_ids if recommendations_by_user.get(uid, {}).get('gender') == 'female']
+    else:
+        filtered_user_ids = all_user_ids
+
+    filtered_total = len(filtered_user_ids)
+    st.info(f"Total users: {filtered_total}" + (f" ({gender_filter.lower()})" if gender_filter != "All" else ""))
 
     # Pagination - store in session state for syncing top/bottom controls
     if 'current_page' not in st.session_state:
         st.session_state.current_page = 1
 
     users_per_page = st.slider("Users per page", min_value=5, max_value=50, value=20, step=5)
-    total_pages = (total_users + users_per_page - 1) // users_per_page
+    total_pages = (filtered_total + users_per_page - 1) // users_per_page
+
+    # Reset page if out of bounds
+    if st.session_state.current_page > max(1, total_pages):
+        st.session_state.current_page = 1
 
     # Top pagination
     page_top = st.number_input("Page", min_value=1, max_value=max(1, total_pages), value=st.session_state.current_page, step=1, key="page_top")
@@ -602,12 +619,12 @@ else:
         st.rerun()
 
     start_idx = (st.session_state.current_page - 1) * users_per_page
-    end_idx = min(start_idx + users_per_page, total_users)
+    end_idx = min(start_idx + users_per_page, filtered_total)
 
-    st.write(f"Showing users {start_idx + 1} to {end_idx} of {total_users}")
+    st.write(f"Showing users {start_idx + 1} to {end_idx} of {filtered_total}")
 
     # Display users
-    users_on_page = all_user_ids[start_idx:end_idx]
+    users_on_page = filtered_user_ids[start_idx:end_idx]
 
     # Pre-fetch all images for the page at once (much faster than per-user fetching)
     images_map = {}
@@ -620,7 +637,7 @@ else:
         display_user_matches(user_id, recommendations_by_user[user_id], images_map if show_images else None)
 
     # Bottom pagination
-    st.write(f"Showing users {start_idx + 1} to {end_idx} of {total_users}")
+    st.write(f"Showing users {start_idx + 1} to {end_idx} of {filtered_total}")
     page_bottom = st.number_input("Page", min_value=1, max_value=max(1, total_pages), value=st.session_state.current_page, step=1, key="page_bottom")
     if page_bottom != st.session_state.current_page:
         st.session_state.current_page = page_bottom
