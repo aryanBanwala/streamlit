@@ -215,22 +215,20 @@ def detect_syntax_errors(input_text: str) -> list[dict]:
     return errors
 
 
-def generate_gmail_url(emails: list[str], subject: str, body: str, to: str = "", cc: str = "", bcc_mode: bool = True) -> str:
-    """Generate a Gmail compose URL."""
+def generate_gmail_url(emails: list[str], subject: str, body: str, email_field: str = "bcc") -> str:
+    """Generate a Gmail compose URL.
+
+    Args:
+        emails: List of email addresses
+        subject: Email subject
+        body: Email body
+        email_field: Where to put emails - "to", "cc", or "bcc" (default)
+    """
     encoded_subject = quote(subject)
     encoded_body = quote(body)
+    emails_str = ",".join(emails)
 
-    if bcc_mode:
-        bcc_emails = ",".join(emails)
-        url = f"https://mail.google.com/mail/u/0/?fs=1&bcc={bcc_emails}&su={encoded_subject}&body={encoded_body}&tf=cm"
-    else:
-        to_emails = ",".join(emails)
-        url = f"https://mail.google.com/mail/u/0/?fs=1&to={to_emails}&su={encoded_subject}&body={encoded_body}&tf=cm"
-
-    if to:
-        url += f"&to={to}"
-    if cc:
-        url += f"&cc={cc}"
+    url = f"https://mail.google.com/mail/u/0/?fs=1&{email_field}={emails_str}&su={encoded_subject}&body={encoded_body}&tf=cm"
 
     return url
 
@@ -261,7 +259,7 @@ def batch_emails(emails: list[str], subject: str, body: str, max_batch_size: int
     return batches
 
 
-def generate_csv_content(batches: list[list[str]], users: list[dict], subject: str, body: str, test_emails: list[str], gender: str) -> str:
+def generate_csv_content(batches: list[list[str]], users: list[dict], subject: str, body: str, test_emails: list[str], gender: str, email_field: str = "bcc") -> str:
     """Generate CSV content for download."""
     output = io.StringIO()
     writer = csv.writer(output, quoting=csv.QUOTE_ALL)
@@ -270,7 +268,7 @@ def generate_csv_content(batches: list[list[str]], users: list[dict], subject: s
     writer.writerow(["batch_number", "email_count", "isTestBatch", "user_ids", "emails", "gmail_link"])
 
     # Test batch first (batch 0)
-    test_gmail_link = generate_gmail_url(test_emails, subject, body)
+    test_gmail_link = generate_gmail_url(test_emails, subject, body, email_field)
     writer.writerow([0, len(test_emails), "true", "test_users", ";".join(test_emails), test_gmail_link])
 
     # User batches
@@ -280,7 +278,7 @@ def generate_csv_content(batches: list[list[str]], users: list[dict], subject: s
             if user.get('user_email') in batch:
                 batch_user_ids.append(user.get('user_id'))
 
-        gmail_link = generate_gmail_url(batch, subject, body)
+        gmail_link = generate_gmail_url(batch, subject, body, email_field)
         writer.writerow([idx + 1, len(batch), "false", ";".join(batch_user_ids), ";".join(batch), gmail_link])
 
     return output.getvalue()
@@ -439,7 +437,21 @@ st.divider()
 # Generate Button
 st.subheader("4. Generate Email Batches")
 
-if st.button("Generate CSV Downloads", type="primary", disabled=len(st.session_state.ebg_parsed_ids) == 0, key="ebg_generate_btn"):
+gen_col1, gen_col2 = st.columns([3, 1])
+
+with gen_col2:
+    email_field = st.selectbox(
+        "Email Field",
+        options=["bcc", "cc", "to"],
+        index=0,
+        key="ebg_email_field",
+        help="Where to put recipient emails in Gmail link"
+    )
+
+with gen_col1:
+    generate_clicked = st.button("Generate CSV Downloads", type="primary", disabled=len(st.session_state.ebg_parsed_ids) == 0, key="ebg_generate_btn", use_container_width=True)
+
+if generate_clicked:
     if not st.session_state.ebg_parsed_ids:
         st.error("Please parse user IDs first!")
     else:
@@ -482,8 +494,8 @@ if st.button("Generate CSV Downloads", type="primary", disabled=len(st.session_s
                 female_batches = batch_emails(female_emails, subject_female, content_female)
 
                 # Generate CSVs
-                st.session_state.ebg_male_csv = generate_csv_content(male_batches, male_users, subject_male, content_male, test_emails, "male")
-                st.session_state.ebg_female_csv = generate_csv_content(female_batches, female_users, subject_female, content_female, test_emails, "female")
+                st.session_state.ebg_male_csv = generate_csv_content(male_batches, male_users, subject_male, content_male, test_emails, "male", email_field)
+                st.session_state.ebg_female_csv = generate_csv_content(female_batches, female_users, subject_female, content_female, test_emails, "female", email_field)
 
                 # Show summary
                 st.success("CSVs Generated!")
