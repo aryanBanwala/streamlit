@@ -68,7 +68,7 @@ def fetch_filter_options():
         return [], []
 
 
-@st.cache_data(ttl=120)
+@st.cache_data(ttl=300)
 def fetch_overview_stats(run_id=None, origin_phase=None, start_date=None, end_date=None):
     """Fetch matches with optional filters for overview stats."""
     try:
@@ -92,16 +92,17 @@ def fetch_overview_stats(run_id=None, origin_phase=None, start_date=None, end_da
         return []
 
 
-@st.cache_data(ttl=120)
-def fetch_user_genders(user_ids: list):
+@st.cache_data(ttl=300)
+def fetch_user_genders(user_ids: tuple):
     """Fetch gender for a list of user_ids from user_metadata."""
     if not user_ids:
         return {}
     try:
         # Batch fetch in chunks of 500 to avoid query limits
         gender_map = {}
-        for i in range(0, len(user_ids), 500):
-            chunk = user_ids[i:i+500]
+        user_ids_list = list(user_ids)
+        for i in range(0, len(user_ids_list), 500):
+            chunk = user_ids_list[i:i+500]
             res = supabase.table('user_metadata').select('user_id, gender').in_('user_id', chunk).execute()
             if res.data:
                 for u in res.data:
@@ -146,16 +147,17 @@ def fetch_user_profile(user_id: str):
         return None
 
 
-@st.cache_data(ttl=60)
-def fetch_user_contact_batch(user_ids: list):
+@st.cache_data(ttl=300)
+def fetch_user_contact_batch(user_ids: tuple):
     """Batch fetch user emails and phones from user_data table."""
     if not user_ids:
         return {}, {}
     try:
         email_map = {}
         phone_map = {}
-        for i in range(0, len(user_ids), 500):
-            chunk = user_ids[i:i+500]
+        user_ids_list = list(user_ids)
+        for i in range(0, len(user_ids_list), 500):
+            chunk = user_ids_list[i:i+500]
             res = supabase.table('user_data').select('user_id, user_email, user_phone').in_('user_id', chunk).execute()
             if res.data:
                 for u in res.data:
@@ -166,15 +168,16 @@ def fetch_user_contact_batch(user_ids: list):
         return {}, {}
 
 
-@st.cache_data(ttl=60)
-def fetch_user_profiles_batch(user_ids: list):
+@st.cache_data(ttl=300)
+def fetch_user_profiles_batch(user_ids: tuple):
     """Batch fetch user profiles from user_metadata."""
     if not user_ids:
         return {}
     try:
+        user_ids_list = list(user_ids)
         res = supabase.table('user_metadata').select(
             'user_id, name, age, gender, city, phone_num, profile_images, instagram_images'
-        ).in_('user_id', user_ids).execute()
+        ).in_('user_id', user_ids_list).execute()
         return {u['user_id']: u for u in res.data} if res.data else {}
     except Exception as e:
         return {}
@@ -277,41 +280,19 @@ if 'ms_last_phase' not in st.session_state:
     st.session_state.ms_last_phase = None
 
 
-# --- Sidebar: Filters ---
-st.sidebar.header("Filters")
-
-# Fetch filter options
-run_ids, origin_phases = fetch_filter_options()
-
-# Run ID filter
-run_options = ["All"] + run_ids
-selected_run = st.sidebar.selectbox("Run ID", options=run_options, index=0)
-run_id_filter = None if selected_run == "All" else selected_run
-
-# Origin Phase filter
-phase_options = ["All"] + origin_phases
-selected_phase = st.sidebar.selectbox("Origin Phase", options=phase_options, index=0)
-phase_filter = None if selected_phase == "All" else selected_phase
-
-# Date Range filter
-st.sidebar.subheader("Date Range")
-col1, col2 = st.sidebar.columns(2)
-with col1:
-    start_date = st.date_input("From", value=date.today() - timedelta(days=30))
-with col2:
-    end_date = st.date_input("To", value=date.today())
-
-st.sidebar.divider()
-
-# Refresh button
+# --- Sidebar ---
+# Refresh button - only clears main data cache, not user profiles/genders
 if st.sidebar.button("Refresh Data", use_container_width=True, type="primary"):
-    st.cache_data.clear()
+    # Clear only the main data fetching caches
+    fetch_overview_stats.clear()
+    fetch_daily_stats.clear()
     st.rerun()
 
-# Handle filter changes - clear cache
-if run_id_filter != st.session_state.ms_last_run_id or phase_filter != st.session_state.ms_last_phase:
-    st.session_state.ms_last_run_id = run_id_filter
-    st.session_state.ms_last_phase = phase_filter
+# Set filters to None (no filtering)
+run_id_filter = None
+phase_filter = None
+start_date = None
+end_date = None
 
 
 # --- Main Content ---
@@ -337,213 +318,231 @@ with tab_overview:
         st.info("No matches found for the selected filters.")
     else:
         df = pd.DataFrame(matches_data)
-        total_count = len(df)
 
-        # Fetch gender data for all current_user_ids
-        all_user_ids = list(set(df['current_user_id'].tolist()))
-        with st.spinner("Loading gender data..."):
-            gender_map = fetch_user_genders(all_user_ids)
+        # Parse dates and add date column
+        df['created_at'] = pd.to_datetime(df['created_at'])
+        df['action_date'] = df['created_at'].dt.date
 
-        # Add gender column to dataframe
-        df['sender_gender'] = df['current_user_id'].map(gender_map)
+        # Get unique dates for dropdown
+        unique_overview_dates = sorted(df['action_date'].unique())
+        overview_date_options = ["All Dates"] + [str(d) for d in unique_overview_dates]
+        selected_overview_date = st.selectbox("Filter by Date", options=overview_date_options, index=0, key="overview_date_filter")
 
-        # Split data by gender
-        df_male = df[df['sender_gender'] == 'male']
-        df_female = df[df['sender_gender'] == 'female']
+        # Filter by selected date
+        if selected_overview_date != "All Dates":
+            selected_overview_date_obj = datetime.strptime(selected_overview_date, '%Y-%m-%d').date()
+            df = df[df['action_date'] == selected_overview_date_obj]
 
-        # Calculate all stats for combined, male, female
-        def calc_stats(data):
-            total = len(data)
-            liked = len(data[data['is_liked'] == 'liked'])
-            disliked = len(data[data['is_liked'] == 'disliked'])
-            passed = len(data[data['is_liked'] == 'passed'])
-            viewed = int(data['is_viewed'].sum()) if 'is_viewed' in data.columns else 0
-            mutual = int(data['is_mutual'].sum()) if 'is_mutual' in data.columns else 0
-            avg_mutual = data['mutual_score'].dropna().mean()
-            avg_know = data['know_more_count'].dropna().mean()
-            return {
-                'total': total,
-                'liked': liked,
-                'disliked': disliked,
-                'passed': passed,
-                'viewed': viewed,
-                'mutual': mutual,
-                'avg_mutual': avg_mutual,
-                'avg_know': avg_know,
-                'like_rate': (liked / total * 100) if total > 0 else 0,
-                'dislike_rate': (disliked / total * 100) if total > 0 else 0,
-                'pass_rate': (passed / total * 100) if total > 0 else 0,
-                'view_rate': (viewed / total * 100) if total > 0 else 0,
-                'mutual_rate': (mutual / total * 100) if total > 0 else 0,
-            }
+        if len(df) == 0:
+            st.info("No data for the selected date.")
+        else:
+            total_count = len(df)
 
-        stats_combined = calc_stats(df)
-        stats_male = calc_stats(df_male)
-        stats_female = calc_stats(df_female)
+            # Fetch gender data for all current_user_ids
+            all_user_ids = tuple(sorted(set(df['current_user_id'].tolist())))
+            with st.spinner("Loading gender data..."):
+                gender_map = fetch_user_genders(all_user_ids)
 
-        # Display metrics in 3 columns: Combined, Male, Female
-        st.markdown("### Core Metrics")
+            # Add gender column to dataframe
+            df['sender_gender'] = df['current_user_id'].map(gender_map)
 
-        # Headers
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("**Metric**")
-        with col_combined:
-            st.markdown("**Combined**")
-        with col_male:
-            st.markdown("**Male**")
-        with col_female:
-            st.markdown("**Female**")
+            # Split data by gender
+            df_male = df[df['sender_gender'] == 'male']
+            df_female = df[df['sender_gender'] == 'female']
 
-        # Total Matches
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("Total Matches")
-        with col_combined:
-            st.metric("", f"{stats_combined['total']:,}", label_visibility="collapsed")
-        with col_male:
-            st.metric("", f"{stats_male['total']:,}", label_visibility="collapsed")
-        with col_female:
-            st.metric("", f"{stats_female['total']:,}", label_visibility="collapsed")
+            # Calculate all stats for combined, male, female
+            def calc_stats(data):
+                total = len(data)
+                liked = len(data[data['is_liked'] == 'liked'])
+                disliked = len(data[data['is_liked'] == 'disliked'])
+                passed = len(data[data['is_liked'] == 'passed'])
+                viewed = int(data['is_viewed'].sum()) if 'is_viewed' in data.columns else 0
+                mutual = int(data['is_mutual'].sum()) if 'is_mutual' in data.columns else 0
+                avg_mutual = data['mutual_score'].dropna().mean()
+                avg_know = data['know_more_count'].dropna().mean()
+                return {
+                    'total': total,
+                    'liked': liked,
+                    'disliked': disliked,
+                    'passed': passed,
+                    'viewed': viewed,
+                    'mutual': mutual,
+                    'avg_mutual': avg_mutual,
+                    'avg_know': avg_know,
+                    'like_rate': (liked / total * 100) if total > 0 else 0,
+                    'dislike_rate': (disliked / total * 100) if total > 0 else 0,
+                    'pass_rate': (passed / total * 100) if total > 0 else 0,
+                    'view_rate': (viewed / total * 100) if total > 0 else 0,
+                    'mutual_rate': (mutual / total * 100) if total > 0 else 0,
+                }
 
-        # Likes
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("Likes")
-        with col_combined:
-            st.metric("", f"{stats_combined['liked']:,}", f"{stats_combined['like_rate']:.1f}%", label_visibility="collapsed")
-        with col_male:
-            st.metric("", f"{stats_male['liked']:,}", f"{stats_male['like_rate']:.1f}%", label_visibility="collapsed")
-        with col_female:
-            st.metric("", f"{stats_female['liked']:,}", f"{stats_female['like_rate']:.1f}%", label_visibility="collapsed")
+            stats_combined = calc_stats(df)
+            stats_male = calc_stats(df_male)
+            stats_female = calc_stats(df_female)
 
-        # Dislikes
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("Dislikes")
-        with col_combined:
-            st.metric("", f"{stats_combined['disliked']:,}", f"{stats_combined['dislike_rate']:.1f}%", label_visibility="collapsed")
-        with col_male:
-            st.metric("", f"{stats_male['disliked']:,}", f"{stats_male['dislike_rate']:.1f}%", label_visibility="collapsed")
-        with col_female:
-            st.metric("", f"{stats_female['disliked']:,}", f"{stats_female['dislike_rate']:.1f}%", label_visibility="collapsed")
+            # Display metrics in 3 columns: Combined, Male, Female
+            st.markdown("### Core Metrics")
 
-        # Passed
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("Passed")
-        with col_combined:
-            st.metric("", f"{stats_combined['passed']:,}", f"{stats_combined['pass_rate']:.1f}%", label_visibility="collapsed")
-        with col_male:
-            st.metric("", f"{stats_male['passed']:,}", f"{stats_male['pass_rate']:.1f}%", label_visibility="collapsed")
-        with col_female:
-            st.metric("", f"{stats_female['passed']:,}", f"{stats_female['pass_rate']:.1f}%", label_visibility="collapsed")
+            # Headers
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("**Metric**")
+            with col_combined:
+                st.markdown("**Combined**")
+            with col_male:
+                st.markdown("**Male**")
+            with col_female:
+                st.markdown("**Female**")
 
-        st.divider()
-        st.markdown("### Engagement Metrics")
+            # Total Matches
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("Total Matches")
+            with col_combined:
+                st.metric("", f"{stats_combined['total']:,}", label_visibility="collapsed")
+            with col_male:
+                st.metric("", f"{stats_male['total']:,}", label_visibility="collapsed")
+            with col_female:
+                st.metric("", f"{stats_female['total']:,}", label_visibility="collapsed")
 
-        # Headers
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("**Metric**")
-        with col_combined:
-            st.markdown("**Combined**")
-        with col_male:
-            st.markdown("**Male**")
-        with col_female:
-            st.markdown("**Female**")
+            # Likes
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("Likes")
+            with col_combined:
+                st.metric("", f"{stats_combined['liked']:,}", f"{stats_combined['like_rate']:.1f}%", label_visibility="collapsed")
+            with col_male:
+                st.metric("", f"{stats_male['liked']:,}", f"{stats_male['like_rate']:.1f}%", label_visibility="collapsed")
+            with col_female:
+                st.metric("", f"{stats_female['liked']:,}", f"{stats_female['like_rate']:.1f}%", label_visibility="collapsed")
 
-        # Viewed
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("Viewed")
-        with col_combined:
-            st.metric("", f"{stats_combined['viewed']:,}", f"{stats_combined['view_rate']:.1f}%", label_visibility="collapsed")
-        with col_male:
-            st.metric("", f"{stats_male['viewed']:,}", f"{stats_male['view_rate']:.1f}%", label_visibility="collapsed")
-        with col_female:
-            st.metric("", f"{stats_female['viewed']:,}", f"{stats_female['view_rate']:.1f}%", label_visibility="collapsed")
+            # Dislikes
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("Dislikes")
+            with col_combined:
+                st.metric("", f"{stats_combined['disliked']:,}", f"{stats_combined['dislike_rate']:.1f}%", label_visibility="collapsed")
+            with col_male:
+                st.metric("", f"{stats_male['disliked']:,}", f"{stats_male['dislike_rate']:.1f}%", label_visibility="collapsed")
+            with col_female:
+                st.metric("", f"{stats_female['disliked']:,}", f"{stats_female['dislike_rate']:.1f}%", label_visibility="collapsed")
 
-        # Mutual Matches
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("Mutual Matches")
-        with col_combined:
-            st.metric("", f"{stats_combined['mutual']:,}", f"{stats_combined['mutual_rate']:.1f}%", label_visibility="collapsed")
-        with col_male:
-            st.metric("", f"{stats_male['mutual']:,}", f"{stats_male['mutual_rate']:.1f}%", label_visibility="collapsed")
-        with col_female:
-            st.metric("", f"{stats_female['mutual']:,}", f"{stats_female['mutual_rate']:.1f}%", label_visibility="collapsed")
+            # Passed
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("Passed")
+            with col_combined:
+                st.metric("", f"{stats_combined['passed']:,}", f"{stats_combined['pass_rate']:.1f}%", label_visibility="collapsed")
+            with col_male:
+                st.metric("", f"{stats_male['passed']:,}", f"{stats_male['pass_rate']:.1f}%", label_visibility="collapsed")
+            with col_female:
+                st.metric("", f"{stats_female['passed']:,}", f"{stats_female['pass_rate']:.1f}%", label_visibility="collapsed")
 
-        # Avg Mutual Score
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("Avg Mutual Score")
-        with col_combined:
-            st.metric("", f"{stats_combined['avg_mutual']:.2f}" if pd.notna(stats_combined['avg_mutual']) else "N/A", label_visibility="collapsed")
-        with col_male:
-            st.metric("", f"{stats_male['avg_mutual']:.2f}" if pd.notna(stats_male['avg_mutual']) else "N/A", label_visibility="collapsed")
-        with col_female:
-            st.metric("", f"{stats_female['avg_mutual']:.2f}" if pd.notna(stats_female['avg_mutual']) else "N/A", label_visibility="collapsed")
+            st.divider()
+            st.markdown("### Engagement Metrics")
 
-        # Avg Know More
-        col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
-        with col_label:
-            st.markdown("Avg Know More")
-        with col_combined:
-            st.metric("", f"{stats_combined['avg_know']:.1f}" if pd.notna(stats_combined['avg_know']) else "N/A", label_visibility="collapsed")
-        with col_male:
-            st.metric("", f"{stats_male['avg_know']:.1f}" if pd.notna(stats_male['avg_know']) else "N/A", label_visibility="collapsed")
-        with col_female:
-            st.metric("", f"{stats_female['avg_know']:.1f}" if pd.notna(stats_female['avg_know']) else "N/A", label_visibility="collapsed")
+            # Headers
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("**Metric**")
+            with col_combined:
+                st.markdown("**Combined**")
+            with col_male:
+                st.markdown("**Male**")
+            with col_female:
+                st.markdown("**Female**")
 
-        st.divider()
+            # Viewed
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("Viewed")
+            with col_combined:
+                st.metric("", f"{stats_combined['viewed']:,}", f"{stats_combined['view_rate']:.1f}%", label_visibility="collapsed")
+            with col_male:
+                st.metric("", f"{stats_male['viewed']:,}", f"{stats_male['view_rate']:.1f}%", label_visibility="collapsed")
+            with col_female:
+                st.metric("", f"{stats_female['viewed']:,}", f"{stats_female['view_rate']:.1f}%", label_visibility="collapsed")
 
-        # Mutual Likes calculation (A liked B AND B liked A)
-        st.markdown("### Mutual Likes Analysis")
+            # Mutual Matches
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("Mutual Matches")
+            with col_combined:
+                st.metric("", f"{stats_combined['mutual']:,}", f"{stats_combined['mutual_rate']:.1f}%", label_visibility="collapsed")
+            with col_male:
+                st.metric("", f"{stats_male['mutual']:,}", f"{stats_male['mutual_rate']:.1f}%", label_visibility="collapsed")
+            with col_female:
+                st.metric("", f"{stats_female['mutual']:,}", f"{stats_female['mutual_rate']:.1f}%", label_visibility="collapsed")
 
-        # Get all likes
-        likes_df = df[df['is_liked'] == 'liked'][['current_user_id', 'matched_user_id']].copy()
+            # Avg Mutual Score
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("Avg Mutual Score")
+            with col_combined:
+                st.metric("", f"{stats_combined['avg_mutual']:.2f}" if pd.notna(stats_combined['avg_mutual']) else "N/A", label_visibility="collapsed")
+            with col_male:
+                st.metric("", f"{stats_male['avg_mutual']:.2f}" if pd.notna(stats_male['avg_mutual']) else "N/A", label_visibility="collapsed")
+            with col_female:
+                st.metric("", f"{stats_female['avg_mutual']:.2f}" if pd.notna(stats_female['avg_mutual']) else "N/A", label_visibility="collapsed")
 
-        # Find mutual likes: where (A->B) exists AND (B->A) exists
-        like_pairs = set(zip(likes_df['current_user_id'], likes_df['matched_user_id']))
+            # Avg Know More
+            col_label, col_combined, col_male, col_female = st.columns([1.5, 1, 1, 1])
+            with col_label:
+                st.markdown("Avg Know More")
+            with col_combined:
+                st.metric("", f"{stats_combined['avg_know']:.1f}" if pd.notna(stats_combined['avg_know']) else "N/A", label_visibility="collapsed")
+            with col_male:
+                st.metric("", f"{stats_male['avg_know']:.1f}" if pd.notna(stats_male['avg_know']) else "N/A", label_visibility="collapsed")
+            with col_female:
+                st.metric("", f"{stats_female['avg_know']:.1f}" if pd.notna(stats_female['avg_know']) else "N/A", label_visibility="collapsed")
 
-        mutual_pairs = set()
-        for curr, matched in like_pairs:
-            if (matched, curr) in like_pairs:
-                pair = tuple(sorted([curr, matched]))
-                mutual_pairs.add(pair)
+            st.divider()
 
-        mutual_like_count = len(mutual_pairs)
-        liked_count = stats_combined['liked']
+            # Mutual Likes calculation (A liked B AND B liked A)
+            st.markdown("### Mutual Likes Analysis")
 
-        col_ml1, col_ml2 = st.columns(2)
-        with col_ml1:
-            st.metric("Mutual Likes (Both Liked)", f"{mutual_like_count:,}")
-        with col_ml2:
-            mutual_like_rate = (mutual_like_count / (liked_count / 2) * 100) if liked_count > 0 else 0
-            st.metric("Mutual Like Rate", f"{mutual_like_rate:.1f}%")
+            # Get all likes
+            likes_df = df[df['is_liked'] == 'liked'][['current_user_id', 'matched_user_id']].copy()
 
-        st.divider()
+            # Find mutual likes: where (A->B) exists AND (B->A) exists
+            like_pairs = set(zip(likes_df['current_user_id'], likes_df['matched_user_id']))
 
-        # Breakdown by origin_phase
-        st.subheader("Breakdown by Origin Phase")
+            mutual_pairs = set()
+            for curr, matched in like_pairs:
+                if (matched, curr) in like_pairs:
+                    pair = tuple(sorted([curr, matched]))
+                    mutual_pairs.add(pair)
 
-        phase_stats = df.groupby('origin_phase').agg({
-            'match_id': 'count',
-            'is_liked': lambda x: (x == 'liked').sum(),
-            'is_viewed': 'sum',
-            'mutual_score': 'mean'
-        }).reset_index()
-        phase_stats.columns = ['Origin Phase', 'Total', 'Likes', 'Views', 'Avg Score']
-        phase_stats['Like Rate %'] = (phase_stats['Likes'] / phase_stats['Total'] * 100).round(1)
-        phase_stats['Avg Score'] = phase_stats['Avg Score'].round(2)
+            mutual_like_count = len(mutual_pairs)
+            liked_count = stats_combined['liked']
 
-        st.dataframe(
-            phase_stats[['Origin Phase', 'Total', 'Likes', 'Like Rate %', 'Views', 'Avg Score']],
-            use_container_width=True,
-            hide_index=True
-        )
+            col_ml1, col_ml2 = st.columns(2)
+            with col_ml1:
+                st.metric("Mutual Likes (Both Liked)", f"{mutual_like_count:,}")
+            with col_ml2:
+                mutual_like_rate = (mutual_like_count / (liked_count / 2) * 100) if liked_count > 0 else 0
+                st.metric("Mutual Like Rate", f"{mutual_like_rate:.1f}%")
+
+            st.divider()
+
+            # Breakdown by origin_phase
+            st.subheader("Breakdown by Origin Phase")
+
+            phase_stats = df.groupby('origin_phase').agg({
+                'match_id': 'count',
+                'is_liked': lambda x: (x == 'liked').sum(),
+                'is_viewed': 'sum',
+                'mutual_score': 'mean'
+            }).reset_index()
+            phase_stats.columns = ['Origin Phase', 'Total', 'Likes', 'Views', 'Avg Score']
+            phase_stats['Like Rate %'] = (phase_stats['Likes'] / phase_stats['Total'] * 100).round(1)
+            phase_stats['Avg Score'] = phase_stats['Avg Score'].round(2)
+
+            st.dataframe(
+                phase_stats[['Origin Phase', 'Total', 'Likes', 'Like Rate %', 'Views', 'Avg Score']],
+                use_container_width=True,
+                hide_index=True
+            )
 
 
 # --- Tab 2: Funnel ---
@@ -564,384 +563,401 @@ with tab_funnel:
     else:
         df_funnel = pd.DataFrame(funnel_data)
 
-        # Fetch gender data for all current_user_ids (the person who received the recommendation)
-        all_funnel_user_ids = list(set(df_funnel['current_user_id'].tolist()))
-        with st.spinner("Loading gender data..."):
-            funnel_gender_map = fetch_user_genders(all_funnel_user_ids)
+        # Parse dates and add date column
+        df_funnel['created_at'] = pd.to_datetime(df_funnel['created_at'])
+        df_funnel['action_date'] = df_funnel['created_at'].dt.date
 
-        # Add gender column
-        df_funnel['user_gender'] = df_funnel['current_user_id'].map(funnel_gender_map)
+        # Get unique dates for dropdown
+        unique_funnel_dates = sorted(df_funnel['action_date'].unique())
+        funnel_date_options = ["All Dates"] + [str(d) for d in unique_funnel_dates]
+        selected_funnel_date = st.selectbox("Filter by Date", options=funnel_date_options, index=0, key="funnel_date_filter")
 
-        # Split by gender
-        df_funnel_male = df_funnel[df_funnel['user_gender'] == 'male']
-        df_funnel_female = df_funnel[df_funnel['user_gender'] == 'female']
+        # Filter by selected date
+        if selected_funnel_date != "All Dates":
+            selected_funnel_date_obj = datetime.strptime(selected_funnel_date, '%Y-%m-%d').date()
+            df_funnel = df_funnel[df_funnel['action_date'] == selected_funnel_date_obj]
 
-        def calc_funnel_stats(data, gender_label):
-            """Calculate funnel statistics for a given dataset."""
-            total = len(data)
-            if total == 0:
-                return None
+        if len(df_funnel) == 0:
+            st.info("No data for the selected date.")
+        else:
+            # Fetch gender data for all current_user_ids (the person who received the recommendation)
+            all_funnel_user_ids = tuple(sorted(set(df_funnel['current_user_id'].tolist())))
+            with st.spinner("Loading gender data..."):
+                funnel_gender_map = fetch_user_genders(all_funnel_user_ids)
 
-            # Unique users (current_user_id = person who received recommendation)
-            unique_users = data['current_user_id'].nunique()
+            # Add gender column
+            df_funnel['user_gender'] = df_funnel['current_user_id'].map(funnel_gender_map)
 
-            # Viewed = is_viewed is True
-            viewed = int(data['is_viewed'].sum()) if 'is_viewed' in data.columns else 0
-            not_viewed = total - viewed
+            # Split by gender
+            df_funnel_male = df_funnel[df_funnel['user_gender'] == 'male']
+            df_funnel_female = df_funnel[df_funnel['user_gender'] == 'female']
 
-            # Unique users who viewed at least one recommendation
-            users_who_viewed = data[data['is_viewed'] == True]['current_user_id'].nunique() if 'is_viewed' in data.columns else 0
+            def calc_funnel_stats(data, gender_label):
+                """Calculate funnel statistics for a given dataset."""
+                total = len(data)
+                if total == 0:
+                    return None
 
-            # Actions
-            liked = len(data[data['is_liked'] == 'liked'])
-            disliked = len(data[data['is_liked'] == 'disliked'])
-            passed = len(data[data['is_liked'] == 'passed'])
+                # Unique users (current_user_id = person who received recommendation)
+                unique_users = data['current_user_id'].nunique()
 
-            # Unique users who took each action
-            users_who_liked = data[data['is_liked'] == 'liked']['current_user_id'].nunique()
-            users_who_disliked = data[data['is_liked'] == 'disliked']['current_user_id'].nunique()
-            users_who_passed = data[data['is_liked'] == 'passed']['current_user_id'].nunique()
+                # Viewed = is_viewed is True
+                viewed = int(data['is_viewed'].sum()) if 'is_viewed' in data.columns else 0
+                not_viewed = total - viewed
 
-            # No action = not liked, disliked, or passed (is_liked is null or empty)
-            actioned = liked + disliked + passed
-            no_action = total - actioned
+                # Unique users who viewed at least one recommendation
+                users_who_viewed = data[data['is_viewed'] == True]['current_user_id'].nunique() if 'is_viewed' in data.columns else 0
 
-            # Unique users who took any action
-            users_with_action = data[data['is_liked'].isin(['liked', 'disliked', 'passed'])]['current_user_id'].nunique()
-            users_no_action = unique_users - users_with_action
+                # Actions
+                liked = len(data[data['is_liked'] == 'liked'])
+                disliked = len(data[data['is_liked'] == 'disliked'])
+                passed = len(data[data['is_liked'] == 'passed'])
 
-            # Know more (clicked to see more details)
-            know_more_clicked = len(data[data['know_more_count'] > 0]) if 'know_more_count' in data.columns else 0
-            users_know_more = data[data['know_more_count'] > 0]['current_user_id'].nunique() if 'know_more_count' in data.columns else 0
+                # Unique users who took each action
+                users_who_liked = data[data['is_liked'] == 'liked']['current_user_id'].nunique()
+                users_who_disliked = data[data['is_liked'] == 'disliked']['current_user_id'].nunique()
+                users_who_passed = data[data['is_liked'] == 'passed']['current_user_id'].nunique()
 
-            # Mutual matches
-            mutual = int(data['is_mutual'].sum()) if 'is_mutual' in data.columns else 0
+                # No action = not liked, disliked, or passed (is_liked is null or empty)
+                actioned = liked + disliked + passed
+                no_action = total - actioned
 
-            # Profile view distribution (how many profiles each user viewed out of 9)
-            # Count views per user
-            if 'is_viewed' in data.columns:
-                views_per_user = data[data['is_viewed'] == True].groupby('current_user_id').size()
-                users_viewed_1_3 = len(views_per_user[(views_per_user >= 1) & (views_per_user <= 3)])
-                users_viewed_4_6 = len(views_per_user[(views_per_user >= 4) & (views_per_user <= 6)])
-                users_viewed_7_9 = len(views_per_user[(views_per_user >= 7) & (views_per_user <= 9)])
-            else:
-                users_viewed_1_3 = 0
-                users_viewed_4_6 = 0
-                users_viewed_7_9 = 0
+                # Unique users who took any action
+                users_with_action = data[data['is_liked'].isin(['liked', 'disliked', 'passed'])]['current_user_id'].nunique()
+                users_no_action = unique_users - users_with_action
 
-            # Recommendations distribution (how many matches/recommendations each user received)
-            recs_per_user = data.groupby('current_user_id').size()
-            min_recs = int(recs_per_user.min()) if len(recs_per_user) > 0 else 0
-            max_recs = int(recs_per_user.max()) if len(recs_per_user) > 0 else 0
-            median_recs = float(recs_per_user.median()) if len(recs_per_user) > 0 else 0
-            users_with_lt_9 = len(recs_per_user[recs_per_user < 9])
-            users_with_9 = len(recs_per_user[recs_per_user == 9])
-            users_with_gt_9 = len(recs_per_user[recs_per_user > 9])
+                # Know more (clicked to see more details)
+                know_more_clicked = len(data[data['know_more_count'] > 0]) if 'know_more_count' in data.columns else 0
+                users_know_more = data[data['know_more_count'] > 0]['current_user_id'].nunique() if 'know_more_count' in data.columns else 0
 
-            return {
-                'gender': gender_label,
-                'total_recommendations': total,
-                'unique_users': unique_users,
-                'avg_recs_per_user': (total / unique_users) if unique_users > 0 else 0,
-                'viewed': viewed,
-                'viewed_rate': (viewed / total * 100) if total > 0 else 0,
-                'users_who_viewed': users_who_viewed,
-                'users_viewed_rate': (users_who_viewed / unique_users * 100) if unique_users > 0 else 0,
-                'not_viewed': not_viewed,
-                'not_viewed_rate': (not_viewed / total * 100) if total > 0 else 0,
-                'any_action': actioned,
-                'any_action_rate': (actioned / total * 100) if total > 0 else 0,
-                'users_with_action': users_with_action,
-                'users_action_rate': (users_with_action / unique_users * 100) if unique_users > 0 else 0,
-                'no_action': no_action,
-                'no_action_rate': (no_action / total * 100) if total > 0 else 0,
-                'users_no_action': users_no_action,
-                'liked': liked,
-                'liked_rate': (liked / total * 100) if total > 0 else 0,
-                'users_who_liked': users_who_liked,
-                'users_liked_rate': (users_who_liked / unique_users * 100) if unique_users > 0 else 0,
-                'liked_of_actioned': (liked / actioned * 100) if actioned > 0 else 0,
-                'disliked': disliked,
-                'disliked_rate': (disliked / total * 100) if total > 0 else 0,
-                'users_who_disliked': users_who_disliked,
-                'passed': passed,
-                'passed_rate': (passed / total * 100) if total > 0 else 0,
-                'users_who_passed': users_who_passed,
-                'know_more': know_more_clicked,
-                'know_more_rate': (know_more_clicked / total * 100) if total > 0 else 0,
-                'users_know_more': users_know_more,
-                'mutual': mutual,
-                'mutual_rate': (mutual / total * 100) if total > 0 else 0,
-                'conversion_rate': (liked / total * 100) if total > 0 else 0,
-                'users_viewed_1_3': users_viewed_1_3,
-                'users_viewed_4_6': users_viewed_4_6,
-                'users_viewed_7_9': users_viewed_7_9,
-                'min_recs': min_recs,
-                'max_recs': max_recs,
-                'median_recs': median_recs,
-                'users_with_lt_9': users_with_lt_9,
-                'users_with_9': users_with_9,
-                'users_with_gt_9': users_with_gt_9,
-            }
+                # Mutual matches
+                mutual = int(data['is_mutual'].sum()) if 'is_mutual' in data.columns else 0
 
-        # Calculate stats for both genders
-        male_funnel = calc_funnel_stats(df_funnel_male, "Male")
-        female_funnel = calc_funnel_stats(df_funnel_female, "Female")
+                # Profile view distribution (how many profiles each user viewed out of 9)
+                # Count views per user
+                if 'is_viewed' in data.columns:
+                    views_per_user = data[data['is_viewed'] == True].groupby('current_user_id').size()
+                    users_viewed_1_3 = len(views_per_user[(views_per_user >= 1) & (views_per_user <= 3)])
+                    users_viewed_4_6 = len(views_per_user[(views_per_user >= 4) & (views_per_user <= 6)])
+                    users_viewed_7_9 = len(views_per_user[(views_per_user >= 7) & (views_per_user <= 9)])
+                else:
+                    users_viewed_1_3 = 0
+                    users_viewed_4_6 = 0
+                    users_viewed_7_9 = 0
 
-        # Display funnel as flow chart
-        def display_funnel_chart(stats, gender_label, color):
-            """Display funnel as a visual flow chart."""
-            if stats is None:
-                st.info(f"No data for {gender_label} users")
-                return
+                # Recommendations distribution (how many matches/recommendations each user received)
+                recs_per_user = data.groupby('current_user_id').size()
+                min_recs = int(recs_per_user.min()) if len(recs_per_user) > 0 else 0
+                max_recs = int(recs_per_user.max()) if len(recs_per_user) > 0 else 0
+                median_recs = float(recs_per_user.median()) if len(recs_per_user) > 0 else 0
+                users_with_lt_9 = len(recs_per_user[recs_per_user < 9])
+                users_with_9 = len(recs_per_user[recs_per_user == 9])
+                users_with_gt_9 = len(recs_per_user[recs_per_user > 9])
 
-            # CSS for funnel boxes
-            st.markdown(f"""
-            <style>
-            .funnel-box {{
-                background: linear-gradient(135deg, {color}22, {color}11);
-                border-left: 4px solid {color};
-                border-radius: 8px;
-                padding: 15px;
-                margin: 8px 0;
-                text-align: center;
-            }}
-            .funnel-box h3 {{
-                margin: 0 0 5px 0;
-                font-size: 24px;
-                color: {color};
-            }}
-            .funnel-box p {{
-                margin: 0;
-                font-size: 14px;
-                color: #888;
-            }}
-            .funnel-arrow {{
-                text-align: center;
-                font-size: 24px;
-                color: #555;
-                margin: 5px 0;
-            }}
-            .funnel-split {{
-                display: flex;
-                justify-content: space-around;
-                gap: 10px;
-            }}
-            .funnel-split-box {{
-                flex: 1;
-                background: #1a1a2e;
-                border-radius: 8px;
-                padding: 12px;
-                text-align: center;
-            }}
-            .funnel-split-box.green {{ border-left: 3px solid #4CAF50; }}
-            .funnel-split-box.red {{ border-left: 3px solid #f44336; }}
-            .funnel-split-box.yellow {{ border-left: 3px solid #ff9800; }}
-            .funnel-split-box.blue {{ border-left: 3px solid #2196F3; }}
-            </style>
-            """, unsafe_allow_html=True)
+                return {
+                    'gender': gender_label,
+                    'total_recommendations': total,
+                    'unique_users': unique_users,
+                    'avg_recs_per_user': (total / unique_users) if unique_users > 0 else 0,
+                    'viewed': viewed,
+                    'viewed_rate': (viewed / total * 100) if total > 0 else 0,
+                    'users_who_viewed': users_who_viewed,
+                    'users_viewed_rate': (users_who_viewed / unique_users * 100) if unique_users > 0 else 0,
+                    'not_viewed': not_viewed,
+                    'not_viewed_rate': (not_viewed / total * 100) if total > 0 else 0,
+                    'any_action': actioned,
+                    'any_action_rate': (actioned / total * 100) if total > 0 else 0,
+                    'users_with_action': users_with_action,
+                    'users_action_rate': (users_with_action / unique_users * 100) if unique_users > 0 else 0,
+                    'no_action': no_action,
+                    'no_action_rate': (no_action / total * 100) if total > 0 else 0,
+                    'users_no_action': users_no_action,
+                    'liked': liked,
+                    'liked_rate': (liked / total * 100) if total > 0 else 0,
+                    'users_who_liked': users_who_liked,
+                    'users_liked_rate': (users_who_liked / unique_users * 100) if unique_users > 0 else 0,
+                    'liked_of_actioned': (liked / actioned * 100) if actioned > 0 else 0,
+                    'disliked': disliked,
+                    'disliked_rate': (disliked / total * 100) if total > 0 else 0,
+                    'users_who_disliked': users_who_disliked,
+                    'passed': passed,
+                    'passed_rate': (passed / total * 100) if total > 0 else 0,
+                    'users_who_passed': users_who_passed,
+                    'know_more': know_more_clicked,
+                    'know_more_rate': (know_more_clicked / total * 100) if total > 0 else 0,
+                    'users_know_more': users_know_more,
+                    'mutual': mutual,
+                    'mutual_rate': (mutual / total * 100) if total > 0 else 0,
+                    'conversion_rate': (liked / total * 100) if total > 0 else 0,
+                    'users_viewed_1_3': users_viewed_1_3,
+                    'users_viewed_4_6': users_viewed_4_6,
+                    'users_viewed_7_9': users_viewed_7_9,
+                    'min_recs': min_recs,
+                    'max_recs': max_recs,
+                    'median_recs': median_recs,
+                    'users_with_lt_9': users_with_lt_9,
+                    'users_with_9': users_with_9,
+                    'users_with_gt_9': users_with_gt_9,
+                }
 
-            # Title
-            st.markdown(f"### {gender_label} Funnel")
+            # Calculate stats for both genders
+            male_funnel = calc_funnel_stats(df_funnel_male, "Male")
+            female_funnel = calc_funnel_stats(df_funnel_female, "Female")
 
-            # Stage 1: Users
-            st.markdown(f"""
-            <div class="funnel-box">
-                <h3>{stats['unique_users']:,}</h3>
-                <p>Unique Users</p>
-                <p style="font-size:12px; color:#666;">({stats['total_recommendations']:,} recommendations, ~{stats['avg_recs_per_user']:.1f}/user)</p>
-            </div>
-            <div class="funnel-arrow">↓</div>
-            """, unsafe_allow_html=True)
+            # Display funnel as flow chart
+            def display_funnel_chart(stats, gender_label, color):
+                """Display funnel as a visual flow chart."""
+                if stats is None:
+                    st.info(f"No data for {gender_label} users")
+                    return
 
-            # Stage 2: Viewed
-            viewed_pct = stats['users_viewed_rate']
-            st.markdown(f"""
-            <div class="funnel-box">
-                <h3>{stats['users_who_viewed']:,}</h3>
-                <p>Users Viewed ({viewed_pct:.1f}%)</p>
-                <p style="font-size:12px; color:#666;">({stats['viewed']:,} views)</p>
-            </div>
-            <div class="funnel-arrow">↓</div>
-            """, unsafe_allow_html=True)
+                # CSS for funnel boxes
+                st.markdown(f"""
+                <style>
+                .funnel-box {{
+                    background: linear-gradient(135deg, {color}22, {color}11);
+                    border-left: 4px solid {color};
+                    border-radius: 8px;
+                    padding: 15px;
+                    margin: 8px 0;
+                    text-align: center;
+                }}
+                .funnel-box h3 {{
+                    margin: 0 0 5px 0;
+                    font-size: 24px;
+                    color: {color};
+                }}
+                .funnel-box p {{
+                    margin: 0;
+                    font-size: 14px;
+                    color: #888;
+                }}
+                .funnel-arrow {{
+                    text-align: center;
+                    font-size: 24px;
+                    color: #555;
+                    margin: 5px 0;
+                }}
+                .funnel-split {{
+                    display: flex;
+                    justify-content: space-around;
+                    gap: 10px;
+                }}
+                .funnel-split-box {{
+                    flex: 1;
+                    background: #1a1a2e;
+                    border-radius: 8px;
+                    padding: 12px;
+                    text-align: center;
+                }}
+                .funnel-split-box.green {{ border-left: 3px solid #4CAF50; }}
+                .funnel-split-box.red {{ border-left: 3px solid #f44336; }}
+                .funnel-split-box.yellow {{ border-left: 3px solid #ff9800; }}
+                .funnel-split-box.blue {{ border-left: 3px solid #2196F3; }}
+                </style>
+                """, unsafe_allow_html=True)
 
-            # Stage 3: Took Action
-            action_pct = stats['users_action_rate']
-            st.markdown(f"""
-            <div class="funnel-box">
-                <h3>{stats['users_with_action']:,}</h3>
-                <p>Users Took Action ({action_pct:.1f}%)</p>
-                <p style="font-size:12px; color:#666;">({stats['any_action']:,} actions)</p>
-            </div>
-            <div class="funnel-arrow">↓</div>
-            """, unsafe_allow_html=True)
+                # Title
+                st.markdown(f"### {gender_label} Funnel")
 
-            # Stage 4: Action breakdown (side by side)
-            st.markdown(f"""
-            <div class="funnel-split">
-                <div class="funnel-split-box green">
-                    <h4 style="color:#4CAF50; margin:0;">{stats['users_who_liked']:,}</h4>
-                    <p style="margin:0; font-size:13px;">Liked</p>
-                    <p style="margin:0; font-size:11px; color:#666;">{stats['liked']:,} likes ({stats['liked_rate']:.1f}%)</p>
+                # Stage 1: Users
+                st.markdown(f"""
+                <div class="funnel-box">
+                    <h3>{stats['unique_users']:,}</h3>
+                    <p>Unique Users</p>
+                    <p style="font-size:12px; color:#666;">({stats['total_recommendations']:,} recommendations, ~{stats['avg_recs_per_user']:.1f}/user)</p>
                 </div>
-                <div class="funnel-split-box red">
-                    <h4 style="color:#f44336; margin:0;">{stats['users_who_disliked']:,}</h4>
-                    <p style="margin:0; font-size:13px;">Disliked</p>
-                    <p style="margin:0; font-size:11px; color:#666;">{stats['disliked']:,} dislikes ({stats['disliked_rate']:.1f}%)</p>
+                <div class="funnel-arrow">↓</div>
+                """, unsafe_allow_html=True)
+
+                # Stage 2: Viewed
+                viewed_pct = stats['users_viewed_rate']
+                st.markdown(f"""
+                <div class="funnel-box">
+                    <h3>{stats['users_who_viewed']:,}</h3>
+                    <p>Users Viewed ({viewed_pct:.1f}%)</p>
+                    <p style="font-size:12px; color:#666;">({stats['viewed']:,} views)</p>
                 </div>
-                <div class="funnel-split-box yellow">
-                    <h4 style="color:#ff9800; margin:0;">{stats['users_who_passed']:,}</h4>
-                    <p style="margin:0; font-size:13px;">Passed</p>
-                    <p style="margin:0; font-size:11px; color:#666;">{stats['passed']:,} passes ({stats['passed_rate']:.1f}%)</p>
+                <div class="funnel-arrow">↓</div>
+                """, unsafe_allow_html=True)
+
+                # Stage 3: Took Action
+                action_pct = stats['users_action_rate']
+                st.markdown(f"""
+                <div class="funnel-box">
+                    <h3>{stats['users_with_action']:,}</h3>
+                    <p>Users Took Action ({action_pct:.1f}%)</p>
+                    <p style="font-size:12px; color:#666;">({stats['any_action']:,} actions)</p>
                 </div>
-            </div>
-            """, unsafe_allow_html=True)
+                <div class="funnel-arrow">↓</div>
+                """, unsafe_allow_html=True)
 
-            # Summary metrics
-            st.markdown("---")
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("Conversion Rate", f"{stats['conversion_rate']:.1f}%")
-            with c2:
-                st.metric("Users No Action", f"{stats['users_no_action']:,}")
-            with c3:
-                st.metric("Know More", f"{stats['users_know_more']:,}")
+                # Stage 4: Action breakdown (side by side)
+                st.markdown(f"""
+                <div class="funnel-split">
+                    <div class="funnel-split-box green">
+                        <h4 style="color:#4CAF50; margin:0;">{stats['users_who_liked']:,}</h4>
+                        <p style="margin:0; font-size:13px;">Liked</p>
+                        <p style="margin:0; font-size:11px; color:#666;">{stats['liked']:,} likes ({stats['liked_rate']:.1f}%)</p>
+                    </div>
+                    <div class="funnel-split-box red">
+                        <h4 style="color:#f44336; margin:0;">{stats['users_who_disliked']:,}</h4>
+                        <p style="margin:0; font-size:13px;">Disliked</p>
+                        <p style="margin:0; font-size:11px; color:#666;">{stats['disliked']:,} dislikes ({stats['disliked_rate']:.1f}%)</p>
+                    </div>
+                    <div class="funnel-split-box yellow">
+                        <h4 style="color:#ff9800; margin:0;">{stats['users_who_passed']:,}</h4>
+                        <p style="margin:0; font-size:13px;">Passed</p>
+                        <p style="margin:0; font-size:11px; color:#666;">{stats['passed']:,} passes ({stats['passed_rate']:.1f}%)</p>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
 
-            # Profile View Distribution (out of 9)
-            st.markdown("##### Profiles Viewed (out of 9)")
-            v1, v2, v3 = st.columns(3)
-            with v1:
-                st.metric("1-3 Profiles", f"{stats['users_viewed_1_3']:,}")
-            with v2:
-                st.metric("4-6 Profiles", f"{stats['users_viewed_4_6']:,}")
-            with v3:
-                st.metric("7-9 Profiles", f"{stats['users_viewed_7_9']:,}")
+                # Summary metrics
+                st.markdown("---")
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("Conversion Rate", f"{stats['conversion_rate']:.1f}%")
+                with c2:
+                    st.metric("Users No Action", f"{stats['users_no_action']:,}")
+                with c3:
+                    st.metric("Know More", f"{stats['users_know_more']:,}")
 
-            # Recommendations Distribution (how many matches each user received)
-            st.markdown("##### Recommendations per User")
-            r1, r2, r3 = st.columns(3)
-            with r1:
-                st.metric("Min/Max", f"{stats['min_recs']} / {stats['max_recs']}")
-            with r2:
-                st.metric("Median", f"{stats['median_recs']:.0f}")
-            with r3:
-                st.metric("Avg", f"{stats['avg_recs_per_user']:.1f}")
+                # Profile View Distribution (out of 9)
+                st.markdown("##### Profiles Viewed (out of 9)")
+                v1, v2, v3 = st.columns(3)
+                with v1:
+                    st.metric("1-3 Profiles", f"{stats['users_viewed_1_3']:,}")
+                with v2:
+                    st.metric("4-6 Profiles", f"{stats['users_viewed_4_6']:,}")
+                with v3:
+                    st.metric("7-9 Profiles", f"{stats['users_viewed_7_9']:,}")
 
-            r4, r5, r6 = st.columns(3)
-            with r4:
-                st.metric("< 9 Recs", f"{stats['users_with_lt_9']:,}")
-            with r5:
-                st.metric("= 9 Recs", f"{stats['users_with_9']:,}")
-            with r6:
-                st.metric("> 9 Recs", f"{stats['users_with_gt_9']:,}")
+                # Recommendations Distribution (how many matches each user received)
+                st.markdown("##### Recommendations per User")
+                r1, r2, r3 = st.columns(3)
+                with r1:
+                    st.metric("Min/Max", f"{stats['min_recs']} / {stats['max_recs']}")
+                with r2:
+                    st.metric("Median", f"{stats['median_recs']:.0f}")
+                with r3:
+                    st.metric("Avg", f"{stats['avg_recs_per_user']:.1f}")
 
-        # Display both funnels side by side
-        col_male, col_female = st.columns(2)
+                r4, r5, r6 = st.columns(3)
+                with r4:
+                    st.metric("< 9 Recs", f"{stats['users_with_lt_9']:,}")
+                with r5:
+                    st.metric("= 9 Recs", f"{stats['users_with_9']:,}")
+                with r6:
+                    st.metric("> 9 Recs", f"{stats['users_with_gt_9']:,}")
 
-        with col_male:
-            display_funnel_chart(male_funnel, "Male", "#2196F3")
+            # Display both funnels side by side
+            col_male, col_female = st.columns(2)
 
-        with col_female:
-            display_funnel_chart(female_funnel, "Female", "#E91E63")
+            with col_male:
+                display_funnel_chart(male_funnel, "Male", "#2196F3")
 
-        st.divider()
+            with col_female:
+                display_funnel_chart(female_funnel, "Female", "#E91E63")
 
-        # Comparison Table
-        st.subheader("Side-by-Side Comparison")
+            st.divider()
 
-        if male_funnel and female_funnel:
-            comparison_data = {
-                'Metric': [
-                    'Total Recommendations',
-                    'Unique Users',
-                    'Avg Recs/User',
-                    'Viewed (recs)',
-                    'Users Viewed',
-                    'Viewed Rate',
-                    'Took Action (recs)',
-                    'Users Took Action',
-                    'Action Rate',
-                    'No Action (recs)',
-                    'Liked (recs)',
-                    'Users Liked',
-                    'Like Rate',
-                    'Disliked (recs)',
-                    'Passed (recs)',
-                    'Know More (recs)',
-                    'Mutual Matches',
-                    'Conversion Rate',
-                    'Viewed 1-3 Profiles',
-                    'Viewed 4-6 Profiles',
-                    'Viewed 7-9 Profiles',
-                    'Min Recs/User',
-                    'Max Recs/User',
-                    'Median Recs/User',
-                    'Users < 9 Recs',
-                    'Users = 9 Recs',
-                    'Users > 9 Recs'
-                ],
-                'Male': [
-                    f"{male_funnel['total_recommendations']:,}",
-                    f"{male_funnel['unique_users']:,}",
-                    f"{male_funnel['avg_recs_per_user']:.1f}",
-                    f"{male_funnel['viewed']:,}",
-                    f"{male_funnel['users_who_viewed']:,}",
-                    f"{male_funnel['viewed_rate']:.1f}%",
-                    f"{male_funnel['any_action']:,}",
-                    f"{male_funnel['users_with_action']:,}",
-                    f"{male_funnel['any_action_rate']:.1f}%",
-                    f"{male_funnel['no_action']:,}",
-                    f"{male_funnel['liked']:,}",
-                    f"{male_funnel['users_who_liked']:,}",
-                    f"{male_funnel['liked_rate']:.1f}%",
-                    f"{male_funnel['disliked']:,}",
-                    f"{male_funnel['passed']:,}",
-                    f"{male_funnel['know_more']:,}",
-                    f"{male_funnel['mutual']:,}",
-                    f"{male_funnel['conversion_rate']:.1f}%",
-                    f"{male_funnel['users_viewed_1_3']:,}",
-                    f"{male_funnel['users_viewed_4_6']:,}",
-                    f"{male_funnel['users_viewed_7_9']:,}",
-                    f"{male_funnel['min_recs']}",
-                    f"{male_funnel['max_recs']}",
-                    f"{male_funnel['median_recs']:.0f}",
-                    f"{male_funnel['users_with_lt_9']:,}",
-                    f"{male_funnel['users_with_9']:,}",
-                    f"{male_funnel['users_with_gt_9']:,}"
-                ],
-                'Female': [
-                    f"{female_funnel['total_recommendations']:,}",
-                    f"{female_funnel['unique_users']:,}",
-                    f"{female_funnel['avg_recs_per_user']:.1f}",
-                    f"{female_funnel['viewed']:,}",
-                    f"{female_funnel['users_who_viewed']:,}",
-                    f"{female_funnel['viewed_rate']:.1f}%",
-                    f"{female_funnel['any_action']:,}",
-                    f"{female_funnel['users_with_action']:,}",
-                    f"{female_funnel['any_action_rate']:.1f}%",
-                    f"{female_funnel['no_action']:,}",
-                    f"{female_funnel['liked']:,}",
-                    f"{female_funnel['users_who_liked']:,}",
-                    f"{female_funnel['liked_rate']:.1f}%",
-                    f"{female_funnel['disliked']:,}",
-                    f"{female_funnel['passed']:,}",
-                    f"{female_funnel['know_more']:,}",
-                    f"{female_funnel['mutual']:,}",
-                    f"{female_funnel['conversion_rate']:.1f}%",
-                    f"{female_funnel['users_viewed_1_3']:,}",
-                    f"{female_funnel['users_viewed_4_6']:,}",
-                    f"{female_funnel['users_viewed_7_9']:,}",
-                    f"{female_funnel['min_recs']}",
-                    f"{female_funnel['max_recs']}",
-                    f"{female_funnel['median_recs']:.0f}",
-                    f"{female_funnel['users_with_lt_9']:,}",
-                    f"{female_funnel['users_with_9']:,}",
-                    f"{female_funnel['users_with_gt_9']:,}"
-                ]
-            }
+            # Comparison Table
+            st.subheader("Side-by-Side Comparison")
 
-            comparison_df = pd.DataFrame(comparison_data)
-            st.dataframe(comparison_df, use_container_width=True, hide_index=True)
+            if male_funnel and female_funnel:
+                comparison_data = {
+                    'Metric': [
+                        'Total Recommendations',
+                        'Unique Users',
+                        'Avg Recs/User',
+                        'Viewed (recs)',
+                        'Users Viewed',
+                        'Viewed Rate',
+                        'Took Action (recs)',
+                        'Users Took Action',
+                        'Action Rate',
+                        'No Action (recs)',
+                        'Liked (recs)',
+                        'Users Liked',
+                        'Like Rate',
+                        'Disliked (recs)',
+                        'Passed (recs)',
+                        'Know More (recs)',
+                        'Mutual Matches',
+                        'Conversion Rate',
+                        'Viewed 1-3 Profiles',
+                        'Viewed 4-6 Profiles',
+                        'Viewed 7-9 Profiles',
+                        'Min Recs/User',
+                        'Max Recs/User',
+                        'Median Recs/User',
+                        'Users < 9 Recs',
+                        'Users = 9 Recs',
+                        'Users > 9 Recs'
+                    ],
+                    'Male': [
+                        f"{male_funnel['total_recommendations']:,}",
+                        f"{male_funnel['unique_users']:,}",
+                        f"{male_funnel['avg_recs_per_user']:.1f}",
+                        f"{male_funnel['viewed']:,}",
+                        f"{male_funnel['users_who_viewed']:,}",
+                        f"{male_funnel['viewed_rate']:.1f}%",
+                        f"{male_funnel['any_action']:,}",
+                        f"{male_funnel['users_with_action']:,}",
+                        f"{male_funnel['any_action_rate']:.1f}%",
+                        f"{male_funnel['no_action']:,}",
+                        f"{male_funnel['liked']:,}",
+                        f"{male_funnel['users_who_liked']:,}",
+                        f"{male_funnel['liked_rate']:.1f}%",
+                        f"{male_funnel['disliked']:,}",
+                        f"{male_funnel['passed']:,}",
+                        f"{male_funnel['know_more']:,}",
+                        f"{male_funnel['mutual']:,}",
+                        f"{male_funnel['conversion_rate']:.1f}%",
+                        f"{male_funnel['users_viewed_1_3']:,}",
+                        f"{male_funnel['users_viewed_4_6']:,}",
+                        f"{male_funnel['users_viewed_7_9']:,}",
+                        f"{male_funnel['min_recs']}",
+                        f"{male_funnel['max_recs']}",
+                        f"{male_funnel['median_recs']:.0f}",
+                        f"{male_funnel['users_with_lt_9']:,}",
+                        f"{male_funnel['users_with_9']:,}",
+                        f"{male_funnel['users_with_gt_9']:,}"
+                    ],
+                    'Female': [
+                        f"{female_funnel['total_recommendations']:,}",
+                        f"{female_funnel['unique_users']:,}",
+                        f"{female_funnel['avg_recs_per_user']:.1f}",
+                        f"{female_funnel['viewed']:,}",
+                        f"{female_funnel['users_who_viewed']:,}",
+                        f"{female_funnel['viewed_rate']:.1f}%",
+                        f"{female_funnel['any_action']:,}",
+                        f"{female_funnel['users_with_action']:,}",
+                        f"{female_funnel['any_action_rate']:.1f}%",
+                        f"{female_funnel['no_action']:,}",
+                        f"{female_funnel['liked']:,}",
+                        f"{female_funnel['users_who_liked']:,}",
+                        f"{female_funnel['liked_rate']:.1f}%",
+                        f"{female_funnel['disliked']:,}",
+                        f"{female_funnel['passed']:,}",
+                        f"{female_funnel['know_more']:,}",
+                        f"{female_funnel['mutual']:,}",
+                        f"{female_funnel['conversion_rate']:.1f}%",
+                        f"{female_funnel['users_viewed_1_3']:,}",
+                        f"{female_funnel['users_viewed_4_6']:,}",
+                        f"{female_funnel['users_viewed_7_9']:,}",
+                        f"{female_funnel['min_recs']}",
+                        f"{female_funnel['max_recs']}",
+                        f"{female_funnel['median_recs']:.0f}",
+                        f"{female_funnel['users_with_lt_9']:,}",
+                        f"{female_funnel['users_with_9']:,}",
+                        f"{female_funnel['users_with_gt_9']:,}"
+                    ]
+                }
+
+                comparison_df = pd.DataFrame(comparison_data)
+                st.dataframe(comparison_df, use_container_width=True, hide_index=True)
 
 
 # --- Tab 3: User Search ---
@@ -1008,7 +1024,7 @@ with tab_user:
             with user_tab1:
                 if outbound:
                     # Get profiles for matched users
-                    matched_ids = [m['matched_user_id'] for m in outbound]
+                    matched_ids = tuple(sorted(set(m['matched_user_id'] for m in outbound)))
                     profiles = fetch_user_profiles_batch(matched_ids)
 
                     for match in outbound:
@@ -1036,7 +1052,7 @@ with tab_user:
             with user_tab2:
                 if inbound:
                     # Get profiles for current users
-                    current_ids = [m['current_user_id'] for m in inbound]
+                    current_ids = tuple(sorted(set(m['current_user_id'] for m in inbound)))
                     profiles = fetch_user_profiles_batch(current_ids)
 
                     for match in inbound:
@@ -1067,7 +1083,14 @@ with tab_user:
 # --- Tab 3: Mutual Likes ---
 with tab_mutual:
     st.subheader("Mutual Likes List")
-    st.markdown("Pairs where **both users liked each other**")
+    st.markdown("""
+    **Match Rules (evaluated per day):**
+    - Like + Like = Match
+    - Like + Passed = Match (if the 'passed' user liked on a previous day)
+    - Passed + Like = Match (if the 'passed' user liked on a previous day)
+    - Like + No action = Match (if the other user liked on a previous day)
+    - Passed + Passed / Like + Dislike / Dislike + Like = No match
+    """)
 
     # Fetch data with filters
     mutual_matches_data = fetch_overview_stats(
@@ -1082,95 +1105,397 @@ with tab_mutual:
     else:
         df_mutual = pd.DataFrame(mutual_matches_data)
 
-        # Get all likes
-        likes_df = df_mutual[df_mutual['is_liked'] == 'liked'][['current_user_id', 'matched_user_id', 'created_at', 'mutual_score', 'origin_phase']].copy()
+        # Parse dates and add date column
+        df_mutual['created_at'] = pd.to_datetime(df_mutual['created_at'])
+        df_mutual['action_date'] = df_mutual['created_at'].dt.date
 
-        # Find mutual likes: where (A->B) exists AND (B->A) exists
-        like_pairs = set(zip(likes_df['current_user_id'], likes_df['matched_user_id']))
+        # Treat NULL/None as 'passed'
+        df_mutual['is_liked'] = df_mutual['is_liked'].fillna('passed')
 
-        # Build list of mutual pairs with details
-        mutual_pairs_list = []
-        seen_pairs = set()
+        # Filter to only actions (liked, disliked, passed)
+        actions_df = df_mutual[df_mutual['is_liked'].isin(['liked', 'disliked', 'passed'])][
+            ['current_user_id', 'matched_user_id', 'is_liked', 'action_date', 'mutual_score', 'origin_phase', 'created_at']
+        ].copy()
 
-        for _, row in likes_df.iterrows():
-            curr = row['current_user_id']
-            matched = row['matched_user_id']
-            if (matched, curr) in like_pairs:
-                # This is a mutual like
-                pair_key = tuple(sorted([curr, matched]))
-                if pair_key not in seen_pairs:
-                    seen_pairs.add(pair_key)
-                    mutual_pairs_list.append({
-                        'user_1': curr,
-                        'user_2': matched,
-                        'created_at': row['created_at'],
-                        'mutual_score': row['mutual_score'],
-                        'origin_phase': row['origin_phase']
-                    })
-
-        if not mutual_pairs_list:
-            st.info("No mutual likes found in the selected date range.")
+        if actions_df.empty:
+            st.info("No actions (likes/dislikes/passes) found in the selected date range.")
         else:
-            st.metric("Total Mutual Likes", len(mutual_pairs_list))
+            # Get unique dates sorted
+            unique_dates = sorted(actions_df['action_date'].unique())
+
+            # Build historical likes lookup: {(user_a, user_b): earliest_like_date}
+            # This tracks when user_a first liked user_b
+            likes_history = {}
+            likes_df = actions_df[actions_df['is_liked'] == 'liked']
+            for _, row in likes_df.iterrows():
+                key = (row['current_user_id'], row['matched_user_id'])
+                like_date = row['action_date']
+                if key not in likes_history or like_date < likes_history[key]:
+                    likes_history[key] = like_date
+
+            def find_matches_for_date(target_date, actions_df, likes_history, already_matched_pairs):
+                """Find all matches for a specific date using the new algorithm.
+                Returns (matches, missed_matches) tuple.
+
+                Rules:
+                1. Like + Like (same day) = Match
+                2. Like + Passed (same day) = Match if 'passed' user liked on a previous day
+                3. Passed + Like (same day) = Match if 'passed' user liked on a previous day
+                4. Like (today) + No action (today) = Match if other user liked on a previous day
+                5. Passed + Passed / Like + Dislike / Dislike + Like = No match
+                """
+                matches = []
+                missed_matches = []
+                seen_pairs = set()
+
+                # Get actions for this specific date
+                day_actions = actions_df[actions_df['action_date'] == target_date]
+
+                # Build lookup for this day: {(user_a, user_b): action}
+                day_action_lookup = {}
+                day_details_lookup = {}
+                for _, row in day_actions.iterrows():
+                    key = (row['current_user_id'], row['matched_user_id'])
+                    day_action_lookup[key] = row['is_liked']
+                    day_details_lookup[key] = {
+                        'mutual_score': row['mutual_score'],
+                        'origin_phase': row['origin_phase'],
+                        'created_at': row['created_at']
+                    }
+
+                # For each action on this day, check if there's a matching action
+                for (user1, user2), action1 in day_action_lookup.items():
+                    pair_key = tuple(sorted([user1, user2]))
+                    if pair_key in seen_pairs or pair_key in already_matched_pairs:
+                        continue
+
+                    # Get user2's action towards user1 on this day
+                    action2 = day_action_lookup.get((user2, user1))
+
+                    is_match = False
+                    is_missed = False
+                    match_type = ""
+                    missed_reason = ""
+
+                    if action2 is not None:
+                        # Both users took action on the same day
+                        if action1 == 'liked' and action2 == 'liked':
+                            is_match = True
+                            match_type = "Like + Like"
+                        elif action1 == 'liked' and action2 == 'passed':
+                            # Check if user2 liked user1 on a previous day
+                            prev_like_date = likes_history.get((user2, user1))
+                            if prev_like_date and prev_like_date < target_date:
+                                is_match = True
+                                match_type = "Like + Passed (prev like)"
+                            else:
+                                is_missed = True
+                                missed_reason = "Like + Passed (no prev like)"
+                        elif action1 == 'passed' and action2 == 'liked':
+                            # Check if user1 liked user2 on a previous day
+                            prev_like_date = likes_history.get((user1, user2))
+                            if prev_like_date and prev_like_date < target_date:
+                                is_match = True
+                                match_type = "Passed + Like (prev like)"
+                            else:
+                                is_missed = True
+                                missed_reason = "Passed + Like (no prev like)"
+                        elif action1 == 'passed' and action2 == 'passed':
+                            is_missed = True
+                            missed_reason = "Passed + Passed"
+                        elif action1 == 'liked' and action2 == 'disliked':
+                            is_missed = True
+                            missed_reason = "Like + Dislike"
+                        elif action1 == 'disliked' and action2 == 'liked':
+                            is_missed = True
+                            missed_reason = "Dislike + Like"
+                        elif action1 == 'disliked' and action2 == 'disliked':
+                            is_missed = True
+                            missed_reason = "Dislike + Dislike"
+                        elif action1 == 'disliked' and action2 == 'passed':
+                            is_missed = True
+                            missed_reason = "Dislike + Passed"
+                        elif action1 == 'passed' and action2 == 'disliked':
+                            is_missed = True
+                            missed_reason = "Passed + Dislike"
+                    else:
+                        # User2 did NOT take action on this day
+                        # Check if user1 liked today AND user2 liked on a previous day
+                        if action1 == 'liked':
+                            prev_like_date = likes_history.get((user2, user1))
+                            if prev_like_date and prev_like_date < target_date:
+                                is_match = True
+                                match_type = "Like + Previous Like"
+
+                    details = day_details_lookup.get((user1, user2), day_details_lookup.get((user2, user1), {}))
+
+                    if is_match:
+                        seen_pairs.add(pair_key)
+                        matches.append({
+                            'user_1': user1,
+                            'user_2': user2,
+                            'match_date': target_date,
+                            'match_type': match_type,
+                            'mutual_score': details.get('mutual_score'),
+                            'origin_phase': details.get('origin_phase'),
+                            'created_at': details.get('created_at')
+                        })
+                    elif is_missed:
+                        seen_pairs.add(pair_key)
+                        missed_matches.append({
+                            'user_1': user1,
+                            'user_2': user2,
+                            'match_date': target_date,
+                            'missed_reason': missed_reason,
+                            'action_1': action1,
+                            'action_2': action2,
+                            'mutual_score': details.get('mutual_score'),
+                            'origin_phase': details.get('origin_phase'),
+                            'created_at': details.get('created_at')
+                        })
+
+                return matches, missed_matches
+
+            # Find matches for all dates
+            all_matches_by_date = {}
+            all_matches_combined = []
+            all_missed_by_date = {}
+            all_missed_combined = []
+            already_matched_pairs = set()  # Track pairs already matched to avoid duplicates
+
+            for d in unique_dates:
+                day_matches, day_missed = find_matches_for_date(d, actions_df, likes_history, already_matched_pairs)
+                if day_matches:
+                    all_matches_by_date[d] = day_matches
+                    all_matches_combined.extend(day_matches)
+                    # Add matched pairs to the set
+                    for m in day_matches:
+                        already_matched_pairs.add(tuple(sorted([m['user_1'], m['user_2']])))
+                if day_missed:
+                    all_missed_by_date[d] = day_missed
+                    all_missed_combined.extend(day_missed)
+
+            # Date filter dropdown - include dates with matches OR missed matches
+            dates_with_data = set(all_matches_by_date.keys()) | set(all_missed_by_date.keys())
+            date_options = ["All Dates"] + [str(d) for d in sorted(dates_with_data)]
+            selected_date_filter = st.selectbox("Filter by Date", options=date_options, index=0)
+
+            # Determine which matches and missed matches to show
+            if selected_date_filter == "All Dates":
+                # Deduplicate combined matches (same pair might appear on multiple days)
+                seen_combined = set()
+                display_matches = []
+                for m in all_matches_combined:
+                    pair_key = tuple(sorted([m['user_1'], m['user_2']]))
+                    if pair_key not in seen_combined:
+                        seen_combined.add(pair_key)
+                        display_matches.append(m)
+                # Deduplicate missed matches
+                seen_missed = set()
+                display_missed = []
+                for m in all_missed_combined:
+                    pair_key = tuple(sorted([m['user_1'], m['user_2']]))
+                    if pair_key not in seen_missed:
+                        seen_missed.add(pair_key)
+                        display_missed.append(m)
+            else:
+                selected_date_obj = datetime.strptime(selected_date_filter, '%Y-%m-%d').date()
+                display_matches = all_matches_by_date.get(selected_date_obj, [])
+                display_missed = all_missed_by_date.get(selected_date_obj, [])
+
+            # Show metrics
+            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+            with col_m1:
+                st.metric("Matches", len(display_matches))
+            with col_m2:
+                st.metric("Missed Matches", len(display_missed))
+            with col_m3:
+                st.metric("Total Unique Matches", len(set(
+                    tuple(sorted([m['user_1'], m['user_2']])) for m in all_matches_combined
+                )))
+            with col_m4:
+                st.metric("Total Missed", len(set(
+                    tuple(sorted([m['user_1'], m['user_2']])) for m in all_missed_combined
+                )))
+
             st.divider()
 
-            # Get all user IDs for profile fetching
-            all_mutual_user_ids = list(set(
-                [p['user_1'] for p in mutual_pairs_list] +
-                [p['user_2'] for p in mutual_pairs_list]
-            ))
+            # --- Unique Males/Females with Matches Section ---
+            if display_matches:
+                # Collect all user IDs from matches
+                match_user_ids = list(set(
+                    [m['user_1'] for m in display_matches] +
+                    [m['user_2'] for m in display_matches]
+                ))
+                match_user_ids_tuple = tuple(sorted(match_user_ids))
 
-            with st.spinner("Loading user profiles..."):
-                mutual_profiles = fetch_user_profiles_batch(all_mutual_user_ids)
-                mutual_genders = fetch_user_genders(all_mutual_user_ids)
-                mutual_emails, mutual_phones = fetch_user_contact_batch(all_mutual_user_ids)
+                # Fetch genders for all matched users
+                with st.spinner("Loading gender data for matched users..."):
+                    matched_user_genders = fetch_user_genders(match_user_ids_tuple)
+                    matched_user_profiles = fetch_user_profiles_batch(match_user_ids_tuple)
 
-            # Display each mutual pair
-            for i, pair in enumerate(mutual_pairs_list):
-                user1_id = pair['user_1']
-                user2_id = pair['user_2']
-                user1_profile = mutual_profiles.get(user1_id, {})
-                user2_profile = mutual_profiles.get(user2_id, {})
+                # Count matches per user
+                user_match_counts = {}
+                for m in display_matches:
+                    user_match_counts[m['user_1']] = user_match_counts.get(m['user_1'], 0) + 1
+                    user_match_counts[m['user_2']] = user_match_counts.get(m['user_2'], 0) + 1
 
-                user1_name = user1_profile.get('name', 'Unknown')
-                user2_name = user2_profile.get('name', 'Unknown')
-                user1_gender = mutual_genders.get(user1_id, 'N/A')
-                user2_gender = mutual_genders.get(user2_id, 'N/A')
-                user1_email = mutual_emails.get(user1_id, 'N/A')
-                user2_email = mutual_emails.get(user2_id, 'N/A')
-                user1_phone = mutual_phones.get(user1_id, 'N/A')
-                user2_phone = mutual_phones.get(user2_id, 'N/A')
+                # Split by gender
+                males_with_matches = []
+                females_with_matches = []
+                for uid in match_user_ids:
+                    gender = matched_user_genders.get(uid)
+                    profile = matched_user_profiles.get(uid, {})
+                    user_data = {
+                        'user_id': uid,
+                        'name': profile.get('name', 'Unknown'),
+                        'age': profile.get('age', 'N/A'),
+                        'city': profile.get('city', 'N/A'),
+                        'match_count': user_match_counts.get(uid, 0)
+                    }
+                    if gender == 'male':
+                        males_with_matches.append(user_data)
+                    elif gender == 'female':
+                        females_with_matches.append(user_data)
 
-                user1_photos = user1_profile.get('profile_images') or user1_profile.get('instagram_images') or []
-                user2_photos = user2_profile.get('profile_images') or user2_profile.get('instagram_images') or []
+                # Sort by match count descending
+                males_with_matches = sorted(males_with_matches, key=lambda x: -x['match_count'])
+                females_with_matches = sorted(females_with_matches, key=lambda x: -x['match_count'])
 
-                with st.expander(f"#{i+1}: {user1_name} ({user1_gender}) ❤️ {user2_name} ({user2_gender})"):
-                    col1, col2 = st.columns(2)
+                st.markdown("### Users with Matches by Gender")
 
-                    with col1:
-                        st.markdown(f"### {user1_name}")
-                        st.markdown(f"**User ID:** `{user1_id}`")
-                        st.markdown(f"**Gender:** {user1_gender}")
-                        st.markdown(f"**Age:** {user1_profile.get('age', 'N/A')}")
-                        st.markdown(f"**City:** {user1_profile.get('city', 'N/A')}")
-                        st.markdown(f"**Phone:** {user1_phone}")
-                        st.markdown(f"**Email:** {user1_email}")
-                        if user1_photos:
-                            st.image(user1_photos[0], width=200)
+                col_males_matches, col_females_matches = st.columns(2)
 
-                    with col2:
-                        st.markdown(f"### {user2_name}")
-                        st.markdown(f"**User ID:** `{user2_id}`")
-                        st.markdown(f"**Gender:** {user2_gender}")
-                        st.markdown(f"**Age:** {user2_profile.get('age', 'N/A')}")
-                        st.markdown(f"**City:** {user2_profile.get('city', 'N/A')}")
-                        st.markdown(f"**Phone:** {user2_phone}")
-                        st.markdown(f"**Email:** {user2_email}")
-                        if user2_photos:
-                            st.image(user2_photos[0], width=200)
+                with col_males_matches:
+                    st.markdown(f"#### Males with Matches ({len(males_with_matches)})")
+                    if males_with_matches:
+                        males_df = pd.DataFrame(males_with_matches)
+                        males_df.columns = ['User ID', 'Name', 'Age', 'City', 'Matches']
+                        st.dataframe(males_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No males found in matches")
 
-                    st.divider()
-                    st.markdown(f"**Mutual Score:** {pair['mutual_score']} | **Phase:** {pair['origin_phase']} | **Date:** {pair['created_at']}")
+                with col_females_matches:
+                    st.markdown(f"#### Females with Matches ({len(females_with_matches)})")
+                    if females_with_matches:
+                        females_df = pd.DataFrame(females_with_matches)
+                        females_df.columns = ['User ID', 'Name', 'Age', 'City', 'Matches']
+                        st.dataframe(females_df, use_container_width=True, hide_index=True)
+                    else:
+                        st.info("No females found in matches")
+
+                st.divider()
+
+            # Build action history lookup for display: {(user_a, user_b): [(date, action), ...]}
+            action_history = {}
+            for _, row in actions_df.iterrows():
+                key = (row['current_user_id'], row['matched_user_id'])
+                if key not in action_history:
+                    action_history[key] = []
+                action_history[key].append({
+                    'date': row['action_date'],
+                    'action': row['is_liked']
+                })
+            # Sort each user's actions by date
+            for key in action_history:
+                action_history[key] = sorted(action_history[key], key=lambda x: x['date'])
+
+            def format_action_history(user_from, user_to):
+                """Format action history for display."""
+                history = action_history.get((user_from, user_to), [])
+                if not history:
+                    return "No actions"
+                lines = []
+                for h in history:
+                    action_emoji = {"liked": "❤️", "passed": "⏭️", "disliked": "👎"}.get(h['action'], "❓")
+                    lines.append(f"{action_emoji} {h['action'].capitalize()} on {h['date']}")
+                return "\n".join(lines)
+
+            # Display matches
+            if not display_matches:
+                st.info("No matches found for the selected date.")
+            else:
+                # Group matches by type for summary
+                match_type_counts = {}
+                for m in display_matches:
+                    mtype = m['match_type']
+                    match_type_counts[mtype] = match_type_counts.get(mtype, 0) + 1
+
+                st.markdown("#### Match Type Breakdown")
+                match_type_cols = st.columns(len(match_type_counts) if match_type_counts else 1)
+                for idx, (mtype, count) in enumerate(sorted(match_type_counts.items(), key=lambda x: -x[1])):
+                    with match_type_cols[idx % len(match_type_cols)]:
+                        st.metric(mtype, count)
+
+                st.divider()
+
+                # Get all user IDs for profile fetching
+                all_mutual_user_ids = list(set(
+                    [p['user_1'] for p in display_matches] +
+                    [p['user_2'] for p in display_matches]
+                ))
+                all_mutual_user_ids_tuple = tuple(sorted(all_mutual_user_ids))
+
+                with st.spinner("Loading user profiles..."):
+                    mutual_profiles = fetch_user_profiles_batch(all_mutual_user_ids_tuple)
+                    mutual_genders = fetch_user_genders(all_mutual_user_ids_tuple)
+                    mutual_emails, mutual_phones = fetch_user_contact_batch(all_mutual_user_ids_tuple)
+
+                # Display each mutual pair
+                for i, pair in enumerate(display_matches):
+                    user1_id = pair['user_1']
+                    user2_id = pair['user_2']
+                    user1_profile = mutual_profiles.get(user1_id, {})
+                    user2_profile = mutual_profiles.get(user2_id, {})
+
+                    user1_name = user1_profile.get('name', 'Unknown')
+                    user2_name = user2_profile.get('name', 'Unknown')
+                    user1_gender = mutual_genders.get(user1_id, 'N/A')
+                    user2_gender = mutual_genders.get(user2_id, 'N/A')
+                    user1_email = mutual_emails.get(user1_id, 'N/A')
+                    user2_email = mutual_emails.get(user2_id, 'N/A')
+                    user1_phone = mutual_phones.get(user1_id, 'N/A')
+                    user2_phone = mutual_phones.get(user2_id, 'N/A')
+
+                    user1_photos = user1_profile.get('profile_images') or user1_profile.get('instagram_images') or []
+                    user2_photos = user2_profile.get('profile_images') or user2_profile.get('instagram_images') or []
+
+                    match_type_badge = f"[{pair['match_type']}]" if pair.get('match_type') else ""
+                    with st.expander(f"#{i+1}: {user1_name} ({user1_gender}) + {user2_name} ({user2_gender}) {match_type_badge}"):
+                        col1, col2 = st.columns(2)
+
+                        with col1:
+                            st.markdown(f"### {user1_name}")
+                            st.markdown(f"**User ID:** `{user1_id}`")
+                            st.markdown(f"**Gender:** {user1_gender}")
+                            st.markdown(f"**Age:** {user1_profile.get('age', 'N/A')}")
+                            st.markdown(f"**City:** {user1_profile.get('city', 'N/A')}")
+                            st.markdown(f"**Phone:** {user1_phone}")
+                            st.markdown(f"**Email:** {user1_email}")
+                            if user1_photos:
+                                st.image(user1_photos[0], width=200)
+                            # Show action history: user1's actions towards user2
+                            st.markdown("---")
+                            st.markdown(f"**Actions towards {user2_name}:**")
+                            st.markdown(format_action_history(user1_id, user2_id))
+
+                        with col2:
+                            st.markdown(f"### {user2_name}")
+                            st.markdown(f"**User ID:** `{user2_id}`")
+                            st.markdown(f"**Gender:** {user2_gender}")
+                            st.markdown(f"**Age:** {user2_profile.get('age', 'N/A')}")
+                            st.markdown(f"**City:** {user2_profile.get('city', 'N/A')}")
+                            st.markdown(f"**Phone:** {user2_phone}")
+                            st.markdown(f"**Email:** {user2_email}")
+                            if user2_photos:
+                                st.image(user2_photos[0], width=200)
+                            # Show action history: user2's actions towards user1
+                            st.markdown("---")
+                            st.markdown(f"**Actions towards {user1_name}:**")
+                            st.markdown(format_action_history(user2_id, user1_id))
+
+                        st.divider()
+                        st.markdown(f"**Match Type:** {pair.get('match_type', 'N/A')} | **Match Date:** {pair['match_date']} | **Mutual Score:** {pair['mutual_score']} | **Phase:** {pair['origin_phase']}")
 
 
 # --- Tab 4: Male Likes ---
@@ -1205,15 +1530,16 @@ with tab_male_likes:
 
             # Fetch gender for all matched users
             with st.spinner("Loading user data..."):
-                matched_genders = fetch_user_genders(matched_user_ids)
+                matched_genders = fetch_user_genders(tuple(sorted(matched_user_ids)))
 
             # Filter to only males
             male_user_ids = [uid for uid in matched_user_ids if matched_genders.get(uid) == 'male']
 
             if male_user_ids:
                 # Fetch profiles and contact info for males
-                male_profiles = fetch_user_profiles_batch(male_user_ids)
-                male_emails, male_phones = fetch_user_contact_batch(male_user_ids)
+                male_user_ids_tuple = tuple(sorted(male_user_ids))
+                male_profiles = fetch_user_profiles_batch(male_user_ids_tuple)
+                male_emails, male_phones = fetch_user_contact_batch(male_user_ids_tuple)
 
                 # Build display data
                 male_likes_data = []
@@ -1285,15 +1611,16 @@ with tab_female_likes:
 
             # Fetch gender for all matched users
             with st.spinner("Loading user data..."):
-                matched_genders_f = fetch_user_genders(matched_user_ids_f)
+                matched_genders_f = fetch_user_genders(tuple(sorted(matched_user_ids_f)))
 
             # Filter to only females
             female_user_ids = [uid for uid in matched_user_ids_f if matched_genders_f.get(uid) == 'female']
 
             if female_user_ids:
                 # Fetch profiles and contact info for females
-                female_profiles = fetch_user_profiles_batch(female_user_ids)
-                female_emails, female_phones = fetch_user_contact_batch(female_user_ids)
+                female_user_ids_tuple = tuple(sorted(female_user_ids))
+                female_profiles = fetch_user_profiles_batch(female_user_ids_tuple)
+                female_emails, female_phones = fetch_user_contact_batch(female_user_ids_tuple)
 
                 # Build display data
                 female_likes_data = []
@@ -1379,10 +1706,10 @@ with tab_trends:
         col1, col2 = st.columns(2)
         with col1:
             st.markdown("**Likes per Day**")
-            st.bar_chart(daily_engagement.set_index('date')['likes'])
+            st.line_chart(daily_engagement.set_index('date')['likes'])
         with col2:
             st.markdown("**Views per Day**")
-            st.bar_chart(daily_engagement.set_index('date')['views'])
+            st.line_chart(daily_engagement.set_index('date')['views'])
 
         st.divider()
 
