@@ -498,33 +498,6 @@ with tab_overview:
 
             st.divider()
 
-            # Mutual Likes calculation (A liked B AND B liked A)
-            st.markdown("### Mutual Likes Analysis")
-
-            # Get all likes
-            likes_df = df[df['is_liked'] == 'liked'][['current_user_id', 'matched_user_id']].copy()
-
-            # Find mutual likes: where (A->B) exists AND (B->A) exists
-            like_pairs = set(zip(likes_df['current_user_id'], likes_df['matched_user_id']))
-
-            mutual_pairs = set()
-            for curr, matched in like_pairs:
-                if (matched, curr) in like_pairs:
-                    pair = tuple(sorted([curr, matched]))
-                    mutual_pairs.add(pair)
-
-            mutual_like_count = len(mutual_pairs)
-            liked_count = stats_combined['liked']
-
-            col_ml1, col_ml2 = st.columns(2)
-            with col_ml1:
-                st.metric("Mutual Likes (Both Liked)", f"{mutual_like_count:,}")
-            with col_ml2:
-                mutual_like_rate = (mutual_like_count / (liked_count / 2) * 100) if liked_count > 0 else 0
-                st.metric("Mutual Like Rate", f"{mutual_like_rate:.1f}%")
-
-            st.divider()
-
             # Breakdown by origin_phase
             st.subheader("Breakdown by Origin Phase")
 
@@ -592,8 +565,14 @@ with tab_funnel:
             df_funnel_male = df_funnel[df_funnel['user_gender'] == 'male']
             df_funnel_female = df_funnel[df_funnel['user_gender'] == 'female']
 
-            def calc_funnel_stats(data, gender_label):
-                """Calculate funnel statistics for a given dataset."""
+            def calc_funnel_stats(data, gender_label, full_data):
+                """Calculate funnel statistics for a given dataset.
+
+                Args:
+                    data: Gender-filtered data for calculating gender-specific stats
+                    gender_label: "Male" or "Female"
+                    full_data: Full dataset with both genders for matching algorithm
+                """
                 total = len(data)
                 if total == 0:
                     return None
@@ -630,8 +609,62 @@ with tab_funnel:
                 know_more_clicked = len(data[data['know_more_count'] > 0]) if 'know_more_count' in data.columns else 0
                 users_know_more = data[data['know_more_count'] > 0]['current_user_id'].nunique() if 'know_more_count' in data.columns else 0
 
-                # Mutual matches
-                mutual = int(data['is_mutual'].sum()) if 'is_mutual' in data.columns else 0
+                # Mutual matches - use the same algorithm as Mutual Likes tab
+                # Use full_data (both genders) for the matching algorithm
+                likes_history = {}
+                likes_df = full_data[full_data['is_liked'] == 'liked']
+                for _, row in likes_df.iterrows():
+                    key = (row['current_user_id'], row['matched_user_id'])
+                    like_date = row['action_date']
+                    if key not in likes_history or like_date < likes_history[key]:
+                        likes_history[key] = like_date
+
+                # Find matches using the algorithm with full data
+                matched_users = set()
+                matched_pairs = set()
+                unique_action_dates = sorted(full_data['action_date'].unique())
+
+                for target_date in unique_action_dates:
+                    day_data = full_data[full_data['action_date'] == target_date]
+                    day_action_lookup = {}
+                    for _, row in day_data.iterrows():
+                        key = (row['current_user_id'], row['matched_user_id'])
+                        day_action_lookup[key] = row['is_liked']
+
+                    for (user1, user2), action1 in day_action_lookup.items():
+                        pair_key = tuple(sorted([user1, user2]))
+                        if pair_key in matched_pairs:
+                            continue
+
+                        action2 = day_action_lookup.get((user2, user1))
+                        is_match = False
+
+                        if action2 is not None:
+                            if action1 == 'liked' and action2 == 'liked':
+                                is_match = True
+                            elif action1 == 'liked' and action2 == 'passed':
+                                prev_like_date = likes_history.get((user2, user1))
+                                if prev_like_date and prev_like_date < target_date:
+                                    is_match = True
+                            elif action1 == 'passed' and action2 == 'liked':
+                                prev_like_date = likes_history.get((user1, user2))
+                                if prev_like_date and prev_like_date < target_date:
+                                    is_match = True
+                        else:
+                            if action1 == 'liked':
+                                prev_like_date = likes_history.get((user2, user1))
+                                if prev_like_date and prev_like_date < target_date:
+                                    is_match = True
+
+                        if is_match:
+                            matched_pairs.add(pair_key)
+                            matched_users.add(user1)
+                            matched_users.add(user2)
+
+                mutual = len(matched_pairs)
+                # Filter to only users from this gender's dataset
+                gender_user_ids = set(data['current_user_id'].unique())
+                users_with_mutual = len(matched_users & gender_user_ids)
 
                 # Profile view distribution (how many profiles each user viewed out of 9)
                 # Count views per user
@@ -688,6 +721,8 @@ with tab_funnel:
                     'users_know_more': users_know_more,
                     'mutual': mutual,
                     'mutual_rate': (mutual / total * 100) if total > 0 else 0,
+                    'users_with_mutual': users_with_mutual,
+                    'users_with_mutual_rate': (users_with_mutual / unique_users * 100) if unique_users > 0 else 0,
                     'conversion_rate': (liked / total * 100) if total > 0 else 0,
                     'users_viewed_1_3': users_viewed_1_3,
                     'users_viewed_4_6': users_viewed_4_6,
@@ -700,9 +735,9 @@ with tab_funnel:
                     'users_with_gt_9': users_with_gt_9,
                 }
 
-            # Calculate stats for both genders
-            male_funnel = calc_funnel_stats(df_funnel_male, "Male")
-            female_funnel = calc_funnel_stats(df_funnel_female, "Female")
+            # Calculate stats for both genders (pass full df_funnel for matching algorithm)
+            male_funnel = calc_funnel_stats(df_funnel_male, "Male", df_funnel)
+            female_funnel = calc_funnel_stats(df_funnel_female, "Female", df_funnel)
 
             # Display funnel as flow chart
             def display_funnel_chart(stats, gender_label, color):
@@ -815,41 +850,15 @@ with tab_funnel:
 
                 # Summary metrics
                 st.markdown("---")
-                c1, c2, c3 = st.columns(3)
+                c1, c2, c3, c4 = st.columns(4)
                 with c1:
                     st.metric("Conversion Rate", f"{stats['conversion_rate']:.1f}%")
                 with c2:
                     st.metric("Users No Action", f"{stats['users_no_action']:,}")
                 with c3:
                     st.metric("Know More", f"{stats['users_know_more']:,}")
-
-                # Profile View Distribution (out of 9)
-                st.markdown("##### Profiles Viewed (out of 9)")
-                v1, v2, v3 = st.columns(3)
-                with v1:
-                    st.metric("1-3 Profiles", f"{stats['users_viewed_1_3']:,}")
-                with v2:
-                    st.metric("4-6 Profiles", f"{stats['users_viewed_4_6']:,}")
-                with v3:
-                    st.metric("7-9 Profiles", f"{stats['users_viewed_7_9']:,}")
-
-                # Recommendations Distribution (how many matches each user received)
-                st.markdown("##### Recommendations per User")
-                r1, r2, r3 = st.columns(3)
-                with r1:
-                    st.metric("Min/Max", f"{stats['min_recs']} / {stats['max_recs']}")
-                with r2:
-                    st.metric("Median", f"{stats['median_recs']:.0f}")
-                with r3:
-                    st.metric("Avg", f"{stats['avg_recs_per_user']:.1f}")
-
-                r4, r5, r6 = st.columns(3)
-                with r4:
-                    st.metric("< 9 Recs", f"{stats['users_with_lt_9']:,}")
-                with r5:
-                    st.metric("= 9 Recs", f"{stats['users_with_9']:,}")
-                with r6:
-                    st.metric("> 9 Recs", f"{stats['users_with_gt_9']:,}")
+                with c4:
+                    st.metric("Users with Mutual Likes", f"{stats['users_with_mutual']:,} / {stats['unique_users']:,}", f"{stats['users_with_mutual_rate']:.1f}%")
 
             # Display both funnels side by side
             col_male, col_female = st.columns(2)
