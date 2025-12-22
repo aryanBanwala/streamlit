@@ -666,13 +666,21 @@ with tab_funnel:
                 gender_user_ids = set(data['current_user_id'].unique())
                 users_with_mutual = len(matched_users & gender_user_ids)
 
-                # Profile view distribution (how many profiles each user viewed out of 9)
-                # Count views per user
-                if 'is_viewed' in data.columns:
-                    views_per_user = data[data['is_viewed'] == True].groupby('current_user_id').size()
-                    users_viewed_1_3 = len(views_per_user[(views_per_user >= 1) & (views_per_user <= 3)])
-                    users_viewed_4_6 = len(views_per_user[(views_per_user >= 4) & (views_per_user <= 6)])
-                    users_viewed_7_9 = len(views_per_user[(views_per_user >= 7) & (views_per_user <= 9)])
+                # Profile view distribution (how many profiles each user viewed per day)
+                # For each user, get their max daily view count to categorize engagement level
+                if 'is_viewed' in data.columns and 'action_date' in data.columns:
+                    # Group by user AND date to get daily view counts
+                    views_per_user_per_day = data[data['is_viewed'] == True].groupby(['current_user_id', 'action_date']).size()
+                    # For each user, get their maximum daily views (best engagement day)
+                    if len(views_per_user_per_day) > 0:
+                        max_views_per_user = views_per_user_per_day.groupby('current_user_id').max()
+                        users_viewed_1_3 = len(max_views_per_user[(max_views_per_user >= 1) & (max_views_per_user <= 3)])
+                        users_viewed_4_6 = len(max_views_per_user[(max_views_per_user >= 4) & (max_views_per_user <= 6)])
+                        users_viewed_7_9 = len(max_views_per_user[max_views_per_user >= 7])
+                    else:
+                        users_viewed_1_3 = 0
+                        users_viewed_4_6 = 0
+                        users_viewed_7_9 = 0
                 else:
                     users_viewed_1_3 = 0
                     users_viewed_4_6 = 0
@@ -797,7 +805,7 @@ with tab_funnel:
 
                 # Stage 1: Users
                 st.markdown(f"""
-                <div class="funnel-box">
+                <div class="funnel-box" title="Total number of unique users who received match recommendations in this period">
                     <h3>{stats['unique_users']:,}</h3>
                     <p>Unique Users</p>
                     <p style="font-size:12px; color:#666;">({stats['total_recommendations']:,} recommendations, ~{stats['avg_recs_per_user']:.1f}/user)</p>
@@ -808,7 +816,7 @@ with tab_funnel:
                 # Stage 2: Viewed
                 viewed_pct = stats['users_viewed_rate']
                 st.markdown(f"""
-                <div class="funnel-box">
+                <div class="funnel-box" title="Users who opened/viewed at least one recommended profile. Percentage is of total unique users.">
                     <h3>{stats['users_who_viewed']:,}</h3>
                     <p>Users Viewed ({viewed_pct:.1f}%)</p>
                     <p style="font-size:12px; color:#666;">({stats['viewed']:,} views)</p>
@@ -816,10 +824,40 @@ with tab_funnel:
                 <div class="funnel-arrow">↓</div>
                 """, unsafe_allow_html=True)
 
+                # Stage 2.5: Viewing Depth Breakdown (how many profiles users viewed)
+                total_viewers = stats['users_viewed_1_3'] + stats['users_viewed_4_6'] + stats['users_viewed_7_9']
+                if total_viewers > 0:
+                    pct_1_3 = (stats['users_viewed_1_3'] / stats['users_who_viewed'] * 100) if stats['users_who_viewed'] > 0 else 0
+                    pct_4_6 = (stats['users_viewed_4_6'] / stats['users_who_viewed'] * 100) if stats['users_who_viewed'] > 0 else 0
+                    pct_7_9 = (stats['users_viewed_7_9'] / stats['users_who_viewed'] * 100) if stats['users_who_viewed'] > 0 else 0
+                    st.markdown(f"""
+                    <div style="background: linear-gradient(135deg, #9c27b022, #9c27b011); border-left: 4px solid #9c27b0; border-radius: 8px; padding: 15px; margin: 8px 0; text-align: center;" title="Breakdown of how many profiles each user viewed before taking action or dropping off">
+                        <p style="margin: 0 0 10px 0; font-size: 14px; color: #888;">Profiles Viewed per User</p>
+                        <div class="funnel-split">
+                            <div class="funnel-split-box" style="border-left: 3px solid #f44336;" title="Users who viewed only 1-3 profiles - early drop-off, low engagement">
+                                <h4 style="color:#f44336; margin:0;">{stats['users_viewed_1_3']:,}</h4>
+                                <p style="margin:0; font-size:13px;">1-3 profiles</p>
+                                <p style="margin:0; font-size:11px; color:#666;">({pct_1_3:.1f}%)</p>
+                            </div>
+                            <div class="funnel-split-box" style="border-left: 3px solid #ff9800;" title="Users who viewed 4-6 profiles - moderate engagement">
+                                <h4 style="color:#ff9800; margin:0;">{stats['users_viewed_4_6']:,}</h4>
+                                <p style="margin:0; font-size:13px;">4-6 profiles</p>
+                                <p style="margin:0; font-size:11px; color:#666;">({pct_4_6:.1f}%)</p>
+                            </div>
+                            <div class="funnel-split-box" style="border-left: 3px solid #4CAF50;" title="Users who viewed 7-9 profiles - high engagement, viewed most recommendations">
+                                <h4 style="color:#4CAF50; margin:0;">{stats['users_viewed_7_9']:,}</h4>
+                                <p style="margin:0; font-size:13px;">7-9 profiles</p>
+                                <p style="margin:0; font-size:11px; color:#666;">({pct_7_9:.1f}%)</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="funnel-arrow">↓</div>
+                    """, unsafe_allow_html=True)
+
                 # Stage 3: Took Action
                 action_pct = stats['users_action_rate']
                 st.markdown(f"""
-                <div class="funnel-box">
+                <div class="funnel-box" title="Users who took at least one action (liked, disliked, or passed) on any recommendation. Percentage is of total unique users.">
                     <h3>{stats['users_with_action']:,}</h3>
                     <p>Users Took Action ({action_pct:.1f}%)</p>
                     <p style="font-size:12px; color:#666;">({stats['any_action']:,} actions)</p>
@@ -830,17 +868,17 @@ with tab_funnel:
                 # Stage 4: Action breakdown (side by side)
                 st.markdown(f"""
                 <div class="funnel-split">
-                    <div class="funnel-split-box green">
+                    <div class="funnel-split-box green" title="Users who liked at least one profile. Shows interest in potential matches.">
                         <h4 style="color:#4CAF50; margin:0;">{stats['users_who_liked']:,}</h4>
                         <p style="margin:0; font-size:13px;">Liked</p>
                         <p style="margin:0; font-size:11px; color:#666;">{stats['liked']:,} likes ({stats['liked_rate']:.1f}%)</p>
                     </div>
-                    <div class="funnel-split-box red">
+                    <div class="funnel-split-box red" title="Users who disliked at least one profile. Explicit rejection of a recommendation.">
                         <h4 style="color:#f44336; margin:0;">{stats['users_who_disliked']:,}</h4>
                         <p style="margin:0; font-size:13px;">Disliked</p>
                         <p style="margin:0; font-size:11px; color:#666;">{stats['disliked']:,} dislikes ({stats['disliked_rate']:.1f}%)</p>
                     </div>
-                    <div class="funnel-split-box yellow">
+                    <div class="funnel-split-box yellow" title="Users who passed on at least one profile. Skipped without explicit like/dislike.">
                         <h4 style="color:#ff9800; margin:0;">{stats['users_who_passed']:,}</h4>
                         <p style="margin:0; font-size:13px;">Passed</p>
                         <p style="margin:0; font-size:11px; color:#666;">{stats['passed']:,} passes ({stats['passed_rate']:.1f}%)</p>
