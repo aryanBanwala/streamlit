@@ -4,7 +4,7 @@ Match-related data fetching and operations.
 import streamlit as st
 from typing import Optional
 from datetime import datetime, timedelta
-from .supabase import supabase, fetch_paginated, batch_fetch
+from .supabase import supabase, fetch_paginated, batch_fetch, fetch_all, fetch_with_filter
 from config import CACHE_TTL_SHORT, CACHE_TTL_MEDIUM, STATUS_PENDING, STATUS_APPROVED
 
 
@@ -15,25 +15,31 @@ class MatchService:
     @st.cache_data(ttl=CACHE_TTL_SHORT)
     def get_user_matches(user_id: str) -> tuple:
         """
-        Fetch all matches for a user.
+        Fetch all matches for a user with pagination.
         Returns (outbound_matches, inbound_matches).
         """
         try:
             # Outbound: user as current_user
-            outbound = supabase.table('user_matches').select(
+            outbound = fetch_all(
+                'user_matches',
                 'match_id, matched_user_id, is_liked, is_viewed, is_mutual, mutual_score, '
                 'viewer_scores_candidate, candidate_scores_viewer, rank, origin_phase, '
-                'created_at, know_more_count'
-            ).eq('current_user_id', user_id).order('created_at', desc=True).execute()
+                'created_at, know_more_count',
+                filters={'current_user_id': user_id},
+                order_by='created_at', desc=True
+            )
 
             # Inbound: user as matched_user
-            inbound = supabase.table('user_matches').select(
+            inbound = fetch_all(
+                'user_matches',
                 'match_id, current_user_id, is_liked, is_viewed, is_mutual, mutual_score, '
                 'viewer_scores_candidate, candidate_scores_viewer, rank, origin_phase, '
-                'created_at, know_more_count'
-            ).eq('matched_user_id', user_id).order('created_at', desc=True).execute()
+                'created_at, know_more_count',
+                filters={'matched_user_id': user_id},
+                order_by='created_at', desc=True
+            )
 
-            return outbound.data or [], inbound.data or []
+            return outbound, inbound
         except Exception:
             return [], []
 
@@ -102,24 +108,26 @@ class MatchService:
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL_SHORT)
     def get_pending_profiles() -> list:
-        """Fetch profiles awaiting human approval."""
+        """Fetch profiles awaiting human approval with pagination."""
         try:
-            response = supabase.table('profiles').select('*').eq(
-                'profile_status', STATUS_PENDING
-            ).order('created_at', desc=True).execute()
-            return response.data or []
+            return fetch_all(
+                'profiles', '*',
+                filters={'profile_status': STATUS_PENDING},
+                order_by='created_at', desc=True
+            )
         except Exception:
             return []
 
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL_SHORT)
     def get_approved_profiles() -> list:
-        """Fetch approved profiles not yet processed by Temporal."""
+        """Fetch approved profiles not yet processed by Temporal with pagination."""
         try:
-            response = supabase.table('profiles').select('*').eq(
-                'profile_status', STATUS_APPROVED
-            ).order('created_at', desc=True).execute()
-            return response.data or []
+            return fetch_all(
+                'profiles', '*',
+                filters={'profile_status': STATUS_APPROVED},
+                order_by='created_at', desc=True
+            )
         except Exception:
             return []
 
@@ -150,19 +158,17 @@ class MatchService:
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL_SHORT)
     def get_match_counts() -> dict:
-        """Get match counts for dashboard overview."""
+        """Get match counts for dashboard overview with pagination."""
         try:
-            pending = supabase.table('profiles').select('profiles_id', count='exact').eq(
-                'profile_status', STATUS_PENDING
-            ).execute()
+            # Fetch all profiles with status and count in memory
+            all_profiles = fetch_all('profiles', 'profiles_id, profile_status')
 
-            approved = supabase.table('profiles').select('profiles_id', count='exact').eq(
-                'profile_status', STATUS_APPROVED
-            ).execute()
+            pending = sum(1 for p in all_profiles if p.get('profile_status') == STATUS_PENDING)
+            approved = sum(1 for p in all_profiles if p.get('profile_status') == STATUS_APPROVED)
 
             return {
-                'pending': pending.count or 0,
-                'approved': approved.count or 0,
+                'pending': pending,
+                'approved': approved,
             }
         except Exception:
             return {'pending': 0, 'approved': 0}

@@ -3,10 +3,12 @@ Dashboard Configuration
 Central configuration for the Lambda Admin Dashboard.
 """
 import os
+from pathlib import Path
 from dotenv import load_dotenv
 
-# Load environment variables
-load_dotenv()
+# Load environment variables from parent directory
+env_path = Path(__file__).parent.parent / '.env'
+load_dotenv(env_path)
 
 # Environment
 ENVIRONMENT = os.getenv('ENVIRONMENT', 'preprod')
@@ -14,7 +16,7 @@ IS_PROD = ENVIRONMENT == 'prod'
 
 # Supabase Configuration
 SUPABASE_URL = os.getenv('SUPABASE_URL_PROD' if IS_PROD else 'SUPABASE_URL')
-SUPABASE_KEY = os.getenv('SUPABASE_KEY_PROD' if IS_PROD else 'SUPABASE_KEY')
+SUPABASE_KEY = os.getenv('SUPABASE_KEY_PROD' if IS_PROD else 'SUPABASE_SERVICE_ROLE_KEY')
 
 # Storage
 STORAGE_BUCKET = "chat-images"

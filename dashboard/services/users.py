@@ -3,7 +3,7 @@ User-related data fetching and operations.
 """
 import streamlit as st
 from typing import Optional
-from .supabase import supabase, batch_fetch
+from .supabase import supabase, batch_fetch, fetch_all
 from config import CACHE_TTL_MEDIUM, CACHE_TTL_SHORT, STORAGE_BUCKET
 
 
@@ -89,10 +89,9 @@ class UserService:
     @staticmethod
     @st.cache_data(ttl=CACHE_TTL_SHORT)
     def get_total_users() -> dict:
-        """Get total user counts by gender."""
+        """Get total user counts by gender with pagination."""
         try:
-            response = supabase.table('user_metadata').select('gender').execute()
-            data = response.data or []
+            data = fetch_all('user_metadata', 'gender')
 
             total = len(data)
             males = sum(1 for u in data if u.get('gender') == 'male')
