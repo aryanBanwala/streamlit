@@ -299,7 +299,7 @@ end_date = None
 st.title("Match Stats")
 
 # Tabs
-tab_overview, tab_funnel, tab_user, tab_mutual, tab_male_likes, tab_female_likes, tab_trends = st.tabs(["Overview", "Funnel", "User Search", "Mutual Likes", "Male Likes", "Female Likes", "Trends"])
+tab_overview, tab_funnel, tab_user, tab_mutual, tab_per_user, tab_male_likes, tab_female_likes, tab_trends = st.tabs(["Overview", "Funnel", "User Search", "Mutual Likes", "Per User Matches", "Male Likes", "Female Likes", "Trends"])
 
 
 # --- Tab 1: Overview ---
@@ -1627,6 +1627,237 @@ with tab_mutual:
 
                         st.divider()
                         st.markdown(f"**Match Type:** {pair.get('match_type', 'N/A')} | **Match Date:** {pair['match_date']} | **Mutual Score:** {pair['mutual_score']} | **Phase:** {pair['origin_phase']}")
+
+
+# --- Tab: Per User Matches ---
+with tab_per_user:
+    st.subheader("Per User Matches")
+    st.markdown("View each user with all their match details listed below them")
+
+    # Fetch data with filters
+    per_user_matches_data = fetch_overview_stats(
+        run_id=run_id_filter,
+        origin_phase=phase_filter,
+        start_date=start_date,
+        end_date=end_date
+    )
+
+    if not per_user_matches_data:
+        st.info("No matches found for the selected filters.")
+    else:
+        df_per_user = pd.DataFrame(per_user_matches_data)
+
+        # Parse dates and add date column
+        df_per_user['created_at'] = pd.to_datetime(df_per_user['created_at'])
+        df_per_user['action_date'] = df_per_user['created_at'].dt.date
+
+        # Treat NULL/None as 'passed'
+        df_per_user['is_liked'] = df_per_user['is_liked'].fillna('passed')
+
+        # Filter to only actions (liked, disliked, passed)
+        actions_per_user_df = df_per_user[df_per_user['is_liked'].isin(['liked', 'disliked', 'passed'])][
+            ['current_user_id', 'matched_user_id', 'is_liked', 'action_date', 'mutual_score', 'origin_phase', 'created_at']
+        ].copy()
+
+        if actions_per_user_df.empty:
+            st.info("No actions (likes/dislikes/passes) found in the selected date range.")
+        else:
+            # Get unique dates sorted
+            unique_dates_pu = sorted(actions_per_user_df['action_date'].unique())
+
+            # Build historical likes lookup
+            likes_history_pu = {}
+            likes_df_pu = actions_per_user_df[actions_per_user_df['is_liked'] == 'liked']
+            for _, row in likes_df_pu.iterrows():
+                key = (row['current_user_id'], row['matched_user_id'])
+                like_date = row['action_date']
+                if key not in likes_history_pu or like_date < likes_history_pu[key]:
+                    likes_history_pu[key] = like_date
+
+            def find_matches_for_date_pu(target_date, actions_df, likes_history, already_matched_pairs):
+                """Find all matches for a specific date."""
+                matches = []
+                seen_pairs = set()
+
+                day_actions = actions_df[actions_df['action_date'] == target_date]
+                day_action_lookup = {}
+                day_details_lookup = {}
+                for _, row in day_actions.iterrows():
+                    key = (row['current_user_id'], row['matched_user_id'])
+                    day_action_lookup[key] = row['is_liked']
+                    day_details_lookup[key] = {
+                        'mutual_score': row['mutual_score'],
+                        'origin_phase': row['origin_phase'],
+                        'created_at': row['created_at']
+                    }
+
+                for (user1, user2), action1 in day_action_lookup.items():
+                    pair_key = tuple(sorted([user1, user2]))
+                    if pair_key in seen_pairs or pair_key in already_matched_pairs:
+                        continue
+
+                    action2 = day_action_lookup.get((user2, user1))
+                    is_match = False
+                    match_type = ""
+
+                    if action2 is not None:
+                        if action1 == 'liked' and action2 == 'liked':
+                            is_match = True
+                            match_type = "Like + Like"
+                        elif action1 == 'liked' and action2 == 'passed':
+                            prev_like_date = likes_history.get((user2, user1))
+                            if prev_like_date and prev_like_date < target_date:
+                                is_match = True
+                                match_type = "Like + Passed (prev like)"
+                        elif action1 == 'passed' and action2 == 'liked':
+                            prev_like_date = likes_history.get((user1, user2))
+                            if prev_like_date and prev_like_date < target_date:
+                                is_match = True
+                                match_type = "Passed + Like (prev like)"
+                    else:
+                        if action1 == 'liked':
+                            prev_like_date = likes_history.get((user2, user1))
+                            if prev_like_date and prev_like_date < target_date:
+                                is_match = True
+                                match_type = "Like + Previous Like"
+
+                    if is_match:
+                        seen_pairs.add(pair_key)
+                        details = day_details_lookup.get((user1, user2), day_details_lookup.get((user2, user1), {}))
+                        matches.append({
+                            'user_1': user1,
+                            'user_2': user2,
+                            'match_date': target_date,
+                            'match_type': match_type,
+                            'mutual_score': details.get('mutual_score'),
+                            'origin_phase': details.get('origin_phase'),
+                            'created_at': details.get('created_at')
+                        })
+
+                return matches
+
+            # Find all matches
+            all_matches_pu = []
+            already_matched_pairs_pu = set()
+
+            for d in unique_dates_pu:
+                day_matches = find_matches_for_date_pu(d, actions_per_user_df, likes_history_pu, already_matched_pairs_pu)
+                if day_matches:
+                    all_matches_pu.extend(day_matches)
+                    for m in day_matches:
+                        already_matched_pairs_pu.add(tuple(sorted([m['user_1'], m['user_2']])))
+
+            if not all_matches_pu:
+                st.info("No mutual matches found.")
+            else:
+                # Date filter
+                dates_with_matches_pu = sorted(set(m['match_date'] for m in all_matches_pu))
+                date_options_pu = ["All Dates"] + [str(d) for d in dates_with_matches_pu]
+                selected_date_pu = st.selectbox("Filter by Date", options=date_options_pu, index=0, key="per_user_date_filter")
+
+                if selected_date_pu == "All Dates":
+                    display_matches_pu = all_matches_pu
+                else:
+                    selected_date_obj_pu = datetime.strptime(selected_date_pu, '%Y-%m-%d').date()
+                    display_matches_pu = [m for m in all_matches_pu if m['match_date'] == selected_date_obj_pu]
+
+                # Collect all user IDs
+                all_user_ids_pu = list(set(
+                    [m['user_1'] for m in display_matches_pu] +
+                    [m['user_2'] for m in display_matches_pu]
+                ))
+
+                # Fetch profiles, genders, and contact info
+                with st.spinner("Loading user data..."):
+                    all_user_ids_tuple_pu = tuple(sorted(all_user_ids_pu))
+                    profiles_pu = fetch_user_profiles_batch(all_user_ids_tuple_pu)
+                    genders_pu = fetch_user_genders(all_user_ids_tuple_pu)
+                    emails_pu, phones_pu = fetch_user_contact_batch(all_user_ids_tuple_pu)
+
+                # Build user -> matches mapping
+                user_matches_map = {}
+                for m in display_matches_pu:
+                    u1, u2 = m['user_1'], m['user_2']
+                    if u1 not in user_matches_map:
+                        user_matches_map[u1] = []
+                    if u2 not in user_matches_map:
+                        user_matches_map[u2] = []
+                    user_matches_map[u1].append({'partner_id': u2, 'match_date': m['match_date'], 'match_type': m['match_type'], 'mutual_score': m['mutual_score']})
+                    user_matches_map[u2].append({'partner_id': u1, 'match_date': m['match_date'], 'match_type': m['match_type'], 'mutual_score': m['mutual_score']})
+
+                # Build user data list
+                users_data_pu = []
+                for uid in all_user_ids_pu:
+                    profile = profiles_pu.get(uid, {})
+                    users_data_pu.append({
+                        'user_id': uid,
+                        'name': profile.get('name', 'Unknown'),
+                        'age': profile.get('age', 'N/A'),
+                        'gender': genders_pu.get(uid, 'N/A'),
+                        'city': profile.get('city', 'N/A'),
+                        'phone': phones_pu.get(uid) or profile.get('phone_num') or 'N/A',
+                        'match_count': len(user_matches_map.get(uid, [])),
+                        'matches': user_matches_map.get(uid, [])
+                    })
+
+                # Sort by match count descending
+                users_data_pu = sorted(users_data_pu, key=lambda x: -x['match_count'])
+
+                # Gender filter
+                gender_filter_pu = st.radio("Filter by Gender", options=["All", "Male", "Female"], horizontal=True, key="per_user_gender_filter")
+
+                if gender_filter_pu == "Male":
+                    users_data_pu = [u for u in users_data_pu if u['gender'] == 'male']
+                elif gender_filter_pu == "Female":
+                    users_data_pu = [u for u in users_data_pu if u['gender'] == 'female']
+
+                st.metric("Total Users with Matches", len(users_data_pu))
+                st.divider()
+
+                # Display each user with their matches
+                for user in users_data_pu:
+                    with st.expander(f"{user['name']} ({user['gender']}) - {user['match_count']} matches"):
+                        # User details
+                        st.markdown(f"**User ID:** `{user['user_id']}`")
+                        col_u1, col_u2, col_u3 = st.columns(3)
+                        with col_u1:
+                            st.markdown(f"**Name:** {user['name']}")
+                            st.markdown(f"**Gender:** {user['gender']}")
+                        with col_u2:
+                            st.markdown(f"**Age:** {user['age']}")
+                            st.markdown(f"**City:** {user['city']}")
+                        with col_u3:
+                            st.markdown(f"**Phone:** {user['phone']}")
+
+                        st.divider()
+                        st.markdown(f"**Matches ({user['match_count']}):**")
+
+                        # Display each match as a row
+                        for idx, match in enumerate(user['matches']):
+                            partner_id = match['partner_id']
+                            partner_profile = profiles_pu.get(partner_id, {})
+                            partner_gender = genders_pu.get(partner_id, 'N/A')
+                            partner_phone = phones_pu.get(partner_id) or partner_profile.get('phone_num') or 'N/A'
+                            partner_photos = partner_profile.get('profile_images') or partner_profile.get('instagram_images') or []
+
+                            st.markdown(f"---")
+                            col_m1, col_m2, col_m3, col_m4 = st.columns([1, 2, 2, 2])
+                            with col_m1:
+                                if partner_photos:
+                                    st.image(partner_photos[0], width=80)
+                                else:
+                                    st.markdown("No photo")
+                            with col_m2:
+                                st.markdown(f"**{partner_profile.get('name', 'Unknown')}**")
+                                st.markdown(f"Gender: {partner_gender}")
+                                st.markdown(f"Age: {partner_profile.get('age', 'N/A')}")
+                            with col_m3:
+                                st.markdown(f"City: {partner_profile.get('city', 'N/A')}")
+                                st.markdown(f"Phone: {partner_phone}")
+                            with col_m4:
+                                st.markdown(f"Match Date: {match['match_date']}")
+                                st.markdown(f"Type: {match['match_type']}")
+                                st.markdown(f"Score: {match['mutual_score']}")
 
 
 # --- Tab 4: Male Likes ---
