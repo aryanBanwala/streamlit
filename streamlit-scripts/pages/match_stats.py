@@ -1796,6 +1796,7 @@ with tab_per_user:
                         'gender': genders_pu.get(uid, 'N/A'),
                         'city': profile.get('city', 'N/A'),
                         'phone': phones_pu.get(uid) or profile.get('phone_num') or 'N/A',
+                        'email': emails_pu.get(uid, 'N/A'),
                         'match_count': len(user_matches_map.get(uid, [])),
                         'matches': user_matches_map.get(uid, [])
                     })
@@ -1828,6 +1829,7 @@ with tab_per_user:
                             st.markdown(f"**City:** {user['city']}")
                         with col_u3:
                             st.markdown(f"**Phone:** {user['phone']}")
+                            st.markdown(f"**Email:** {user['email']}")
 
                         st.divider()
                         st.markdown(f"**Matches ({user['match_count']}):**")
@@ -1838,6 +1840,7 @@ with tab_per_user:
                             partner_profile = profiles_pu.get(partner_id, {})
                             partner_gender = genders_pu.get(partner_id, 'N/A')
                             partner_phone = phones_pu.get(partner_id) or partner_profile.get('phone_num') or 'N/A'
+                            partner_email = emails_pu.get(partner_id, 'N/A')
                             partner_photos = partner_profile.get('profile_images') or partner_profile.get('instagram_images') or []
 
                             st.markdown(f"---")
@@ -1849,11 +1852,13 @@ with tab_per_user:
                                     st.markdown("No photo")
                             with col_m2:
                                 st.markdown(f"**{partner_profile.get('name', 'Unknown')}**")
+                                st.markdown(f"ID: `{partner_id}`")
                                 st.markdown(f"Gender: {partner_gender}")
                                 st.markdown(f"Age: {partner_profile.get('age', 'N/A')}")
                             with col_m3:
                                 st.markdown(f"City: {partner_profile.get('city', 'N/A')}")
                                 st.markdown(f"Phone: {partner_phone}")
+                                st.markdown(f"Email: {partner_email}")
                             with col_m4:
                                 st.markdown(f"Match Date: {match['match_date']}")
                                 st.markdown(f"Type: {match['match_type']}")
