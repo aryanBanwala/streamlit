@@ -1387,18 +1387,36 @@ with tab_mutual:
                     user_match_counts[m['user_1']] = user_match_counts.get(m['user_1'], 0) + 1
                     user_match_counts[m['user_2']] = user_match_counts.get(m['user_2'], 0) + 1
 
+                # Fetch contact info for phone numbers
+                with st.spinner("Loading contact data..."):
+                    _, matched_user_phones = fetch_user_contact_batch(match_user_ids_tuple)
+
+                # Build a lookup for each user's matched partners
+                user_matched_partners = {}
+                for m in display_matches:
+                    u1, u2 = m['user_1'], m['user_2']
+                    if u1 not in user_matched_partners:
+                        user_matched_partners[u1] = []
+                    if u2 not in user_matched_partners:
+                        user_matched_partners[u2] = []
+                    user_matched_partners[u1].append(u2)
+                    user_matched_partners[u2].append(u1)
+
                 # Split by gender
                 males_with_matches = []
                 females_with_matches = []
                 for uid in match_user_ids:
                     gender = matched_user_genders.get(uid)
                     profile = matched_user_profiles.get(uid, {})
+                    phone = matched_user_phones.get(uid) or profile.get('phone_num') or 'N/A'
                     user_data = {
                         'user_id': uid,
                         'name': profile.get('name', 'Unknown'),
                         'age': profile.get('age', 'N/A'),
                         'city': profile.get('city', 'N/A'),
-                        'match_count': user_match_counts.get(uid, 0)
+                        'phone': phone,
+                        'match_count': user_match_counts.get(uid, 0),
+                        'matched_partner_ids': user_matched_partners.get(uid, [])
                     }
                     if gender == 'male':
                         males_with_matches.append(user_data)
@@ -1416,18 +1434,84 @@ with tab_mutual:
                 with col_males_matches:
                     st.markdown(f"#### Males with Matches ({len(males_with_matches)})")
                     if males_with_matches:
+                        # Create dataframe
                         males_df = pd.DataFrame(males_with_matches)
-                        males_df.columns = ['User ID', 'Name', 'Age', 'City', 'Matches']
-                        st.dataframe(males_df, use_container_width=True, hide_index=True)
+                        males_display_df = males_df[['user_id', 'name', 'age', 'city', 'phone', 'match_count']].copy()
+                        males_display_df.columns = ['User ID', 'Name', 'Age', 'City', 'Phone', 'Matches']
+
+                        # Display dataframe with row selection
+                        male_selection = st.dataframe(
+                            males_display_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=400,
+                            selection_mode="single-row",
+                            on_select="rerun",
+                            key="males_table"
+                        )
+
+                        # Show matched users for selected male
+                        if male_selection and male_selection.selection and male_selection.selection.rows:
+                            selected_idx = male_selection.selection.rows[0]
+                            selected_male_user = males_with_matches[selected_idx]
+                            st.divider()
+                            partner_ids = selected_male_user.get('matched_partner_ids', [])
+                            if partner_ids:
+                                st.markdown(f"**{selected_male_user['name']}'s Matches ({len(partner_ids)}):**")
+                                for pid in partner_ids:
+                                    p_profile = matched_user_profiles.get(pid, {})
+                                    p_phone = matched_user_phones.get(pid) or p_profile.get('phone_num') or 'N/A'
+                                    p_gender = matched_user_genders.get(pid, 'N/A')
+                                    with st.expander(f"{p_profile.get('name', 'Unknown')} ({p_gender})"):
+                                        st.markdown(f"**User ID:** `{pid}`")
+                                        st.markdown(f"**Name:** {p_profile.get('name', 'Unknown')}")
+                                        st.markdown(f"**Age:** {p_profile.get('age', 'N/A')}")
+                                        st.markdown(f"**City:** {p_profile.get('city', 'N/A')}")
+                                        st.markdown(f"**Phone:** {p_phone}")
+                            else:
+                                st.info("No matched partners found")
                     else:
                         st.info("No males found in matches")
 
                 with col_females_matches:
                     st.markdown(f"#### Females with Matches ({len(females_with_matches)})")
                     if females_with_matches:
+                        # Create dataframe
                         females_df = pd.DataFrame(females_with_matches)
-                        females_df.columns = ['User ID', 'Name', 'Age', 'City', 'Matches']
-                        st.dataframe(females_df, use_container_width=True, hide_index=True)
+                        females_display_df = females_df[['user_id', 'name', 'age', 'city', 'phone', 'match_count']].copy()
+                        females_display_df.columns = ['User ID', 'Name', 'Age', 'City', 'Phone', 'Matches']
+
+                        # Display dataframe with row selection
+                        female_selection = st.dataframe(
+                            females_display_df,
+                            use_container_width=True,
+                            hide_index=True,
+                            height=400,
+                            selection_mode="single-row",
+                            on_select="rerun",
+                            key="females_table"
+                        )
+
+                        # Show matched users for selected female
+                        if female_selection and female_selection.selection and female_selection.selection.rows:
+                            selected_idx = female_selection.selection.rows[0]
+                            selected_female_user = females_with_matches[selected_idx]
+                            st.divider()
+                            partner_ids = selected_female_user.get('matched_partner_ids', [])
+                            if partner_ids:
+                                st.markdown(f"**{selected_female_user['name']}'s Matches ({len(partner_ids)}):**")
+                                for pid in partner_ids:
+                                    p_profile = matched_user_profiles.get(pid, {})
+                                    p_phone = matched_user_phones.get(pid) or p_profile.get('phone_num') or 'N/A'
+                                    p_gender = matched_user_genders.get(pid, 'N/A')
+                                    with st.expander(f"{p_profile.get('name', 'Unknown')} ({p_gender})"):
+                                        st.markdown(f"**User ID:** `{pid}`")
+                                        st.markdown(f"**Name:** {p_profile.get('name', 'Unknown')}")
+                                        st.markdown(f"**Age:** {p_profile.get('age', 'N/A')}")
+                                        st.markdown(f"**City:** {p_profile.get('city', 'N/A')}")
+                                        st.markdown(f"**Phone:** {p_phone}")
+                            else:
+                                st.info("No matched partners found")
                     else:
                         st.info("No females found in matches")
 
