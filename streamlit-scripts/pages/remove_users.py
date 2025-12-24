@@ -171,7 +171,7 @@ st.sidebar.header("Filters")
 
 # Date filter
 filter_date = st.sidebar.date_input(
-    "Created after",
+    "Created on or after",
     value=None,
     key="filter_date"
 )
