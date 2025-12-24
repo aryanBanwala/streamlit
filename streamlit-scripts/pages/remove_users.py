@@ -80,24 +80,41 @@ st.caption("Review users and mark them for removal")
 def fetch_users_to_review(after_date=None):
     """Fetch users where hasAppropriatePhotos is true or null (not false)."""
     try:
-        # Fetch all users and filter in Python since Supabase doesn't support OR with NULL easily
-        query = supabase.table('user_metadata').select(
-            'user_id, name, city, area, work_exp, education, interesting_facts, religion, '
-            'profile_images, collage_images, instagram_images, "shouldBeRemoved", "hasAppropriatePhotos", created_at, '
-            'gender, professional_tier, attractiveness, age'
-        )
+        # Fetch all users with pagination (500 per page)
+        all_users = []
+        page_size = 500
+        offset = 0
 
-        # Add date filter if provided
-        if after_date:
-            query = query.gte('created_at', after_date.isoformat())
+        while True:
+            query = supabase.table('user_metadata').select(
+                'user_id, name, city, area, work_exp, education, interesting_facts, religion, '
+                'profile_images, collage_images, instagram_images, "shouldBeRemoved", "hasAppropriatePhotos", created_at, '
+                'gender, professional_tier, attractiveness, age'
+            )
 
-        res = query.execute()
+            # Add date filter if provided
+            if after_date:
+                query = query.gte('created_at', after_date.isoformat())
 
-        if not res.data:
+            # Add pagination
+            res = query.range(offset, offset + page_size - 1).execute()
+
+            if not res.data:
+                break
+
+            all_users.extend(res.data)
+
+            # If we got fewer results than page_size, we've reached the end
+            if len(res.data) < page_size:
+                break
+
+            offset += page_size
+
+        if not all_users:
             return []
 
         # Filter: hasAppropriatePhotos != false (i.e., true or null)
-        filtered = [u for u in res.data if u.get('hasAppropriatePhotos') != False]
+        filtered = [u for u in all_users if u.get('hasAppropriatePhotos') != False]
         return filtered
     except Exception as e:
         st.error(f"Error fetching users: {e}")
