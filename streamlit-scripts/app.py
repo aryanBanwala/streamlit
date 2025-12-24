@@ -3,6 +3,7 @@ Lambda Admin Dashboard - Main Entry Point
 All admin tools accessible from one place.
 """
 import streamlit as st
+import os
 
 # --- Page Config (must be first) ---
 st.set_page_config(
@@ -11,6 +12,37 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- Authentication ---
+def check_credentials(username: str, password: str) -> bool:
+    """Check if credentials match env variables."""
+    correct_username = os.getenv("ADMIN_USERNAME", "admin")
+    correct_password = os.getenv("ADMIN_PASSWORD", "admin")
+    return username == correct_username and password == correct_password
+
+def login_screen():
+    """Display login form and handle authentication."""
+    st.title("🔐 Lambda Admin Login")
+
+    with st.form("login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Login", use_container_width=True)
+
+        if submitted:
+            if check_credentials(username, password):
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Invalid username or password")
+
+# Check authentication
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+if not st.session_state.authenticated:
+    login_screen()
+    st.stop()
 
 # --- Define all pages ---
 home_page = st.Page("pages/home.py", title="Home", icon="🏠", default=True)
