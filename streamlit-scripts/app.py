@@ -14,35 +14,42 @@ st.set_page_config(
 )
 
 # --- Authentication ---
-def check_credentials(username: str, password: str) -> bool:
-    """Check if credentials match env variables."""
-    correct_username = os.getenv("ADMIN_USERNAME", "admin")
-    correct_password = os.getenv("ADMIN_PASSWORD", "admin")
-    return username == correct_username and password == correct_password
+# Allowed domains (e.g., "heywavelength.com") or specific emails
+ALLOWED_DOMAINS = [
+    domain.strip().lower()
+    for domain in os.getenv("ALLOWED_DOMAINS", "").split(",")
+    if domain.strip()
+]
 
-def login_screen():
-    """Display login form and handle authentication."""
-    st.title("🔐 Lambda Admin Login")
+def check_access(email: str) -> bool:
+    """Check if email domain is allowed."""
+    if not ALLOWED_DOMAINS:
+        return True  # If no allowlist configured, allow all authenticated users
+    email_domain = email.lower().split("@")[-1]
+    return email_domain in ALLOWED_DOMAINS
 
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Login", use_container_width=True)
-
-        if submitted:
-            if check_credentials(username, password):
-                st.session_state.authenticated = True
-                st.rerun()
-            else:
-                st.error("Invalid username or password")
-
-# Check authentication
-if "authenticated" not in st.session_state:
-    st.session_state.authenticated = False
-
-if not st.session_state.authenticated:
-    login_screen()
+# Check if user is logged in
+if not st.experimental_user.is_logged_in:
+    st.title("Lambda Admin Login")
+    st.write("Please sign in with your Google account to continue.")
+    if st.button("Sign in with Google", type="primary", use_container_width=True):
+        st.login("google")
     st.stop()
+
+# Check if user's email is allowed
+user_email = st.experimental_user.email
+if not check_access(user_email):
+    st.error(f"Access denied. Your email ({user_email}) is not authorized.")
+    st.write("Please contact an administrator to request access.")
+    if st.button("Sign out"):
+        st.logout()
+    st.stop()
+
+# Show logged in user in sidebar
+with st.sidebar:
+    st.write(f"Logged in as: **{user_email}**")
+    if st.button("Sign out"):
+        st.logout()
 
 # --- Define all pages ---
 home_page = st.Page("pages/home.py", title="Home", icon="🏠", default=True)
