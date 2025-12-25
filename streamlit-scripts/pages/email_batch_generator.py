@@ -12,7 +12,7 @@ from urllib.parse import quote
 from datetime import datetime
 from dotenv import load_dotenv
 
-# Setup paths
+# Setup paths 
 current_dir = os.path.dirname(__file__)
 scripts_dir = os.path.abspath(os.path.join(current_dir, '..'))
 parent_dir = os.path.abspath(os.path.join(scripts_dir, '..'))
