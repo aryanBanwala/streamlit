@@ -111,7 +111,7 @@ def search_users(query: str):
 
         # Search by user_id (exact match)
         res_id = supabase.table('user_metadata').select(
-            'user_id, name, gender, age, city, profile_images, ghost_status'
+            'user_id, name, gender, age, city, profile_images, is_ghost, ghosted_at, ghost_reason'
         ).eq('user_id', query).execute()
 
         if res_id.data:
@@ -119,7 +119,7 @@ def search_users(query: str):
 
         # Search by name (case-insensitive, partial match)
         res_name = supabase.table('user_metadata').select(
-            'user_id, name, gender, age, city, profile_images, ghost_status'
+            'user_id, name, gender, age, city, profile_images, is_ghost, ghosted_at, ghost_reason'
         ).ilike('name', f'%{query}%').limit(20).execute()
 
         return res_name.data if res_name.data else []
@@ -131,27 +131,11 @@ def search_users(query: str):
 def fetch_ghosted_users():
     """Fetch all users marked as ghosted."""
     try:
-        # Fetch users where ghost_status has is_ghost = true
         res = supabase.table('user_metadata').select(
-            'user_id, name, gender, age, city, ghost_status'
-        ).neq('ghost_status', {}).execute()
+            'user_id, name, gender, age, city, is_ghost, ghosted_at, ghost_reason'
+        ).eq('is_ghost', True).order('ghosted_at', desc=True).execute()
 
-        if not res.data:
-            return []
-
-        # Filter to only include users where is_ghost is true
-        ghosted = [
-            u for u in res.data
-            if u.get('ghost_status') and u['ghost_status'].get('is_ghost') == True
-        ]
-
-        # Sort by ghosted_at date (most recent first)
-        ghosted.sort(
-            key=lambda x: x.get('ghost_status', {}).get('ghosted_at', ''),
-            reverse=True
-        )
-
-        return ghosted
+        return res.data if res.data else []
     except Exception as e:
         st.error(f"Error fetching ghosted users: {e}")
         return []
@@ -163,15 +147,11 @@ def mark_user_as_ghost(user_id: str, reason: str = "no_response_after_match"):
         ist = pytz.timezone('Asia/Kolkata')
         now = datetime.now(ist).isoformat()
 
-        ghost_status = {
-            "is_ghost": True,
-            "ghosted_at": now,
-            "reason": reason
-        }
-
-        supabase.table('user_metadata').update(
-            {'ghost_status': ghost_status}
-        ).eq('user_id', user_id).execute()
+        supabase.table('user_metadata').update({
+            'is_ghost': True,
+            'ghosted_at': now,
+            'ghost_reason': reason
+        }).eq('user_id', user_id).execute()
 
         return True
     except Exception as e:
@@ -182,9 +162,11 @@ def mark_user_as_ghost(user_id: str, reason: str = "no_response_after_match"):
 def unmark_user_as_ghost(user_id: str):
     """Remove ghost status from a user."""
     try:
-        supabase.table('user_metadata').update(
-            {'ghost_status': {}}
-        ).eq('user_id', user_id).execute()
+        supabase.table('user_metadata').update({
+            'is_ghost': False,
+            'ghosted_at': None,
+            'ghost_reason': None
+        }).eq('user_id', user_id).execute()
 
         return True
     except Exception as e:
@@ -229,10 +211,9 @@ if st.session_state.ghost_search_results:
         gender = user.get('gender') or 'N/A'
         age = user.get('age') or 'N/A'
         city = user.get('city') or 'N/A'
-        ghost_status = user.get('ghost_status') or {}
-        is_ghosted = ghost_status.get('is_ghost', False)
-
-        card_class = "ghost-card ghost-card-ghosted" if is_ghosted else "ghost-card"
+        is_ghosted = user.get('is_ghost', False)
+        ghosted_at = user.get('ghosted_at')
+        ghost_reason = user.get('ghost_reason')
 
         with st.container():
             col1, col2, col3 = st.columns([1, 3, 2])
@@ -261,16 +242,14 @@ if st.session_state.ghost_search_results:
                 )
                 st.caption(f"ID: {user_id}")
 
-                if is_ghosted:
-                    ghosted_at = ghost_status.get('ghosted_at', 'N/A')
-                    reason = ghost_status.get('reason', 'N/A')
-                    if ghosted_at != 'N/A':
-                        try:
-                            dt = datetime.fromisoformat(ghosted_at)
-                            ghosted_at = dt.strftime('%d %b %Y, %I:%M %p')
-                        except:
-                            pass
-                    st.markdown(f'<div class="ghosted-date">Ghosted: {ghosted_at} | Reason: {reason}</div>', unsafe_allow_html=True)
+                if is_ghosted and ghosted_at:
+                    display_date = ghosted_at
+                    try:
+                        dt = datetime.fromisoformat(ghosted_at.replace('Z', '+00:00'))
+                        display_date = dt.strftime('%d %b %Y, %I:%M %p')
+                    except:
+                        pass
+                    st.markdown(f'<div class="ghosted-date">Ghosted: {display_date} | Reason: {ghost_reason or "N/A"}</div>', unsafe_allow_html=True)
 
             # Action button
             with col3:
@@ -319,17 +298,17 @@ if ghosted_users:
         gender = user.get('gender') or 'N/A'
         age = user.get('age') or 'N/A'
         city = user.get('city') or 'N/A'
-        ghost_status = user.get('ghost_status', {})
-        ghosted_at = ghost_status.get('ghosted_at', 'N/A')
-        reason = ghost_status.get('reason', 'N/A')
+        ghosted_at = user.get('ghosted_at')
+        ghost_reason = user.get('ghost_reason') or 'N/A'
 
         # Format date
-        if ghosted_at != 'N/A':
+        display_date = 'N/A'
+        if ghosted_at:
             try:
-                dt = datetime.fromisoformat(ghosted_at)
-                ghosted_at = dt.strftime('%d %b %Y, %I:%M %p')
+                dt = datetime.fromisoformat(ghosted_at.replace('Z', '+00:00'))
+                display_date = dt.strftime('%d %b %Y, %I:%M %p')
             except:
-                pass
+                display_date = ghosted_at
 
         with st.expander(f"{name} - {city}", expanded=False):
             col1, col2 = st.columns([3, 1])
@@ -338,8 +317,8 @@ if ghosted_users:
                 st.markdown(f"**User ID:** {user_id}")
                 st.markdown(f"**Gender:** {gender} | **Age:** {age}")
                 st.markdown(f"**City:** {city}")
-                st.markdown(f"**Ghosted At:** {ghosted_at}")
-                st.markdown(f"**Reason:** {reason}")
+                st.markdown(f"**Ghosted At:** {display_date}")
+                st.markdown(f"**Reason:** {ghost_reason}")
 
             with col2:
                 if st.button("Remove Ghost Status", key=f"list_unghost_{user_id}"):
