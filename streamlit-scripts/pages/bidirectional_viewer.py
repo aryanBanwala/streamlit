@@ -334,14 +334,8 @@ if uploaded_file is not None:
         st.rerun()
 
     # --- Step 3: Review Couples ---
-    # Show loading if step 3 but metadata not yet loaded
-    if st.session_state.step >= 3 and st.session_state.couples and not st.session_state.user_metadata_cache:
-        st.divider()
-        st.info("Loading user metadata... Please wait.")
-        st.stop()
-
-    # Only show Step 3 when metadata is fully loaded
-    if st.session_state.step >= 3 and st.session_state.couples and st.session_state.user_metadata_cache:
+    # Show Step 3 if couples are generated (metadata may or may not be loaded)
+    if st.session_state.step >= 3 and st.session_state.couples:
         st.divider()
         st.subheader("Step 3: Review Couples")
 
@@ -349,13 +343,23 @@ if uploaded_file is not None:
         ratings = st.session_state.ratings
         metadata_cache = st.session_state.user_metadata_cache
 
+        # Auto-fetch metadata if cache is empty
+        if not metadata_cache:
+            all_user_ids = set()
+            for c in couples:
+                all_user_ids.add(c['female_id'])
+                all_user_ids.add(c['male_id'])
+            with st.spinner("Loading user data from database..."):
+                metadata = fetch_user_metadata_batch(tuple(all_user_ids))
+                st.session_state.user_metadata_cache = metadata
+                metadata_cache = metadata
 
         submitted_count = sum(1 for c in couples if ratings.get(get_couple_key(c), {}).get('submitted', False))
         total_count = len(couples)
         progress_pct = (submitted_count / total_count * 100) if total_count > 0 else 0
 
-        # Header with download and progress
-        col_download, col_progress = st.columns([1, 2])
+        # Header with download, reload and progress
+        col_download, col_reload, col_progress = st.columns([1, 1, 2])
 
         with col_download:
             if submitted_count > 0:
@@ -385,6 +389,19 @@ if uploaded_file is not None:
                 )
             else:
                 st.button("Download CSV (0)", disabled=True)
+
+        with col_reload:
+            if st.button("Reload from DB", type="secondary", use_container_width=True):
+                # Clear cache and refetch user metadata
+                fetch_user_metadata_batch.clear()
+                all_user_ids = set()
+                for c in couples:
+                    all_user_ids.add(c['female_id'])
+                    all_user_ids.add(c['male_id'])
+                with st.spinner("Reloading user data..."):
+                    metadata = fetch_user_metadata_batch(tuple(all_user_ids))
+                    st.session_state.user_metadata_cache = metadata
+                st.rerun()
 
         with col_progress:
             st.markdown(f"**Progress:** {submitted_count} / {total_count}")
