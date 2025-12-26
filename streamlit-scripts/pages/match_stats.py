@@ -176,7 +176,7 @@ def fetch_user_profiles_batch(user_ids: tuple):
     try:
         user_ids_list = list(user_ids)
         res = supabase.table('user_metadata').select(
-            'user_id, name, age, gender, city, phone_num, profile_images, instagram_images'
+            'user_id, name, age, gender, city, phone_num, profile_images, instagram_images, dob'
         ).in_('user_id', user_ids_list).execute()
         return {u['user_id']: u for u in res.data} if res.data else {}
     except Exception as e:
@@ -202,6 +202,30 @@ def fetch_daily_stats(days=30, run_id=None, origin_phase=None):
     except Exception as e:
         st.error(f"Error fetching daily stats: {e}")
         return []
+
+
+def calculate_age_from_dob(dob_str: str) -> int | None:
+    """Calculate age from DOB string using IST timezone."""
+    if not dob_str:
+        return None
+    try:
+        for fmt in ['%Y-%m-%d', '%d-%m-%Y', '%d/%m/%Y', '%Y/%m/%d']:
+            try:
+                dob = datetime.strptime(dob_str, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return None
+        now_utc = datetime.utcnow()
+        ist_offset = timedelta(hours=5, minutes=30)
+        now_ist = now_utc + ist_offset
+        age = now_ist.year - dob.year
+        if (now_ist.month, now_ist.day) < (dob.month, dob.day):
+            age -= 1
+        return age
+    except Exception:
+        return None
 
 
 def display_user_images(photos: list, height: int = 300):
@@ -1064,8 +1088,8 @@ with tab_user:
 
             # Sub-tabs for outbound/inbound
             user_tab1, user_tab2 = st.tabs([
-                f"Outbound ({len(outbound)})",
-                f"Inbound ({len(inbound)})"
+                f"Shown to this user ({len(outbound)})",
+                f"This user shown to ({len(inbound)})"
             ])
 
             with user_tab1:
@@ -1080,8 +1104,11 @@ with tab_user:
                         name = profile.get('name', 'Unknown')
                         photos = profile.get('profile_images') or profile.get('instagram_images') or []
                         thumb = photos[0] if photos else None
+                        dob = profile.get('dob')
+                        age = calculate_age_from_dob(dob) if dob else profile.get('age')
+                        age_display = f", {age}" if age else ""
 
-                        with st.expander(f"{name} ({matched_id[:8]}...) - {match.get('is_liked', 'N/A')}"):
+                        with st.expander(f"{name}{age_display} ({matched_id[:8]}...) - {match.get('is_liked', 'N/A')}"):
                             cols = st.columns([1, 3])
                             with cols[0]:
                                 if thumb:
@@ -1089,7 +1116,7 @@ with tab_user:
                                 else:
                                     st.markdown("No photo")
                             with cols[1]:
-                                st.markdown(f"**Status:** {match.get('is_liked', 'N/A')} | **Viewed:** {match.get('is_viewed', False)}")
+                                st.markdown(f"**Age:** {age if age else 'N/A'} | **Status:** {match.get('is_liked', 'N/A')} | **Viewed:** {match.get('is_viewed', False)}")
                                 st.markdown(f"**Mutual Score:** {match.get('mutual_score', 'N/A')} | **Rank:** {match.get('rank', 'N/A')}")
                                 st.markdown(f"**Phase:** {match.get('origin_phase', 'N/A')} | **Date:** {match.get('created_at', 'N/A')}")
                                 st.markdown(f"**Know More Count:** {match.get('know_more_count', 0)}")
@@ -1108,8 +1135,11 @@ with tab_user:
                         name = profile.get('name', 'Unknown')
                         photos = profile.get('profile_images') or profile.get('instagram_images') or []
                         thumb = photos[0] if photos else None
+                        dob = profile.get('dob')
+                        age = calculate_age_from_dob(dob) if dob else profile.get('age')
+                        age_display = f", {age}" if age else ""
 
-                        with st.expander(f"{name} ({current_id[:8]}...) - {match.get('is_liked', 'N/A')}"):
+                        with st.expander(f"{name}{age_display} ({current_id[:8]}...) - {match.get('is_liked', 'N/A')}"):
                             cols = st.columns([1, 3])
                             with cols[0]:
                                 if thumb:
@@ -1117,7 +1147,7 @@ with tab_user:
                                 else:
                                     st.markdown("No photo")
                             with cols[1]:
-                                st.markdown(f"**Status:** {match.get('is_liked', 'N/A')} | **Viewed:** {match.get('is_viewed', False)}")
+                                st.markdown(f"**Age:** {age if age else 'N/A'} | **Status:** {match.get('is_liked', 'N/A')} | **Viewed:** {match.get('is_viewed', False)}")
                                 st.markdown(f"**Mutual Score:** {match.get('mutual_score', 'N/A')} | **Rank:** {match.get('rank', 'N/A')}")
                                 st.markdown(f"**Phase:** {match.get('origin_phase', 'N/A')} | **Date:** {match.get('created_at', 'N/A')}")
                                 st.markdown(f"**Know More Count:** {match.get('know_more_count', 0)}")
