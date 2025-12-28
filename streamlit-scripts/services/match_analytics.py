@@ -6,7 +6,7 @@ import sys
 import json
 import time
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Callable, Optional
 
 # Add parent directory for imports
@@ -173,8 +173,9 @@ def save_json_files(matches: list, metadata: list) -> None:
             'data': metadata
         }, f)
 
-    # Save last refresh timestamp
-    refresh_time = datetime.now().strftime('%b %d, %Y %I:%M %p IST')
+    # Save last refresh timestamp in IST (UTC+5:30)
+    ist = timezone(timedelta(hours=5, minutes=30))
+    refresh_time = datetime.now(ist).strftime('%b %d, %Y %I:%M %p IST')
     LAST_REFRESH_FILE.write_text(refresh_time)
 
 
