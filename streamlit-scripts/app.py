@@ -3,7 +3,6 @@ Lambda Admin Dashboard - Main Entry Point
 All admin tools accessible from one place.
 """
 import streamlit as st
-import os
 from streamlit_oauth import OAuth2Component
 
 # --- Page Config (must be first) ---
@@ -19,12 +18,8 @@ GOOGLE_CLIENT_ID = st.secrets["auth"]["google"]["client_id"]
 GOOGLE_CLIENT_SECRET = st.secrets["auth"]["google"]["client_secret"]
 REDIRECT_URI = st.secrets["auth"]["redirect_uri"]
 
-# Allowed domains (e.g., "heywavelength.com") or specific emails
-ALLOWED_DOMAINS = [
-    domain.strip().lower()
-    for domain in os.getenv("ALLOWED_DOMAINS", "").split(",")
-    if domain.strip()
-]
+# Allowed domains (e.g., "heywavelength.com") - from secrets.toml
+ALLOWED_DOMAINS = [d.lower() for d in st.secrets.get("auth", {}).get("allowed_domains", [])]
 
 def check_access(email: str) -> bool:
     """Check if email domain is allowed."""
