@@ -29,7 +29,7 @@ def check_access(email: str) -> bool:
     return email_domain in ALLOWED_DOMAINS
 
 # Check if user is logged in
-if not st.experimental_user.is_logged_in:
+if not st.user.is_logged_in:
     st.title("Lambda Admin Login")
     st.write("Please sign in with your Google account to continue.")
     if st.button("Sign in with Google", type="primary", use_container_width=True):
@@ -37,7 +37,7 @@ if not st.experimental_user.is_logged_in:
     st.stop()
 
 # Check if user's email is allowed
-user_email = st.experimental_user.email
+user_email = st.user.email
 if not check_access(user_email):
     st.error(f"Access denied. Your email ({user_email}) is not authorized.")
     st.write("Please contact an administrator to request access.")
