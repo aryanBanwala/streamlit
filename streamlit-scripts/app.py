@@ -14,8 +14,10 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Cookie Manager for persistent auth ---
-cookie_manager = stx.CookieManager(key="auth_cookies")
+# --- Cookie Manager (cached to avoid re-initialization) ---
+@st.cache_resource(hash_funcs={stx.CookieManager: id})
+def get_manager():
+    return stx.CookieManager()
 
 # --- Google OAuth Configuration (from .streamlit/secrets.toml) ---
 GOOGLE_CLIENT_ID = st.secrets["auth"]["google"]["client_id"]
@@ -33,10 +35,13 @@ def check_access(email: str) -> bool:
     return email_domain in ALLOWED_DOMAINS
 
 # --- Authentication ---
-# Try to get email from cookie first
-user_email = cookie_manager.get("user_email")
+cookie_manager = get_manager()
 
-if user_email is None:
+# Get user email from cookie
+user_email = cookie_manager.get(cookie="user_email")
+
+# Check if user is logged in
+if not user_email:
     # Hide sidebar when not logged in
     st.markdown("""
         <style>
@@ -78,8 +83,7 @@ if user_email is None:
             headers={"Authorization": f"Bearer {access_token}"}
         ).json()
         email = user_info.get("email")
-        # Store in cookie (expires in 7 days)
-        cookie_manager.set("user_email", email, max_age=60*60*24*7)
+        cookie_manager.set("user_email", email, key="set_email")
         st.rerun()
 
     st.stop()
@@ -96,16 +100,16 @@ if not check_access(user_email):
 
     st.error(f"Access denied. Your email ({user_email}) is not authorized.")
     st.write("Please contact an administrator to request access.")
-    if st.button("Sign out"):
-        cookie_manager.delete("user_email")
+    if st.button("Sign out", key="signout_denied"):
+        cookie_manager.delete("user_email", key="delete_email_denied")
         st.rerun()
     st.stop()
 
 # Show logged in user in sidebar
 with st.sidebar:
     st.write(f"Logged in as: **{user_email}**")
-    if st.button("Sign out"):
-        cookie_manager.delete("user_email")
+    if st.button("Sign out", key="signout_sidebar"):
+        cookie_manager.delete("user_email", key="delete_email_sidebar")
         st.rerun()
 
 # --- Define all pages ---
