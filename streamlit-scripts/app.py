@@ -33,6 +33,14 @@ if "user_email" not in st.session_state:
     st.session_state.user_email = None
 
 if st.session_state.user_email is None:
+    # Hide sidebar when not logged in
+    st.markdown("""
+        <style>
+            [data-testid="stSidebar"] {display: none;}
+            [data-testid="stSidebarNav"] {display: none;}
+        </style>
+    """, unsafe_allow_html=True)
+
     st.title("Lambda Admin Login")
     st.write("Please sign in with your Google account to continue.")
 
@@ -73,6 +81,14 @@ if st.session_state.user_email is None:
 # Check if user's email is allowed
 user_email = st.session_state.user_email
 if not check_access(user_email):
+    # Hide sidebar for unauthorized users
+    st.markdown("""
+        <style>
+            [data-testid="stSidebar"] {display: none;}
+            [data-testid="stSidebarNav"] {display: none;}
+        </style>
+    """, unsafe_allow_html=True)
+
     st.error(f"Access denied. Your email ({user_email}) is not authorized.")
     st.write("Please contact an administrator to request access.")
     if st.button("Sign out"):
