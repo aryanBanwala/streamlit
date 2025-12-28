@@ -53,6 +53,8 @@ if st.session_state.user_email is None:
         scope="openid email profile",
         key="google_oauth",
         use_container_width=True,
+        extras_params={"prompt": "select_account"},
+        pkce="S256",
     )
 
     if result and "token" in result:
