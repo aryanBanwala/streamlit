@@ -1431,22 +1431,50 @@ with tab5:
         # Select metric for matrix
         matrix_metric = st.radio(
             "Select metric for matrix:",
-            options=['like_rate', 'view_rate', 'count', 'km_avg'],
+            options=['like_rate', 'view_rate', 'count', 'km_avg', 'mutual_match'],
             format_func=lambda x: {
                 'like_rate': 'Like Rate %',
                 'view_rate': 'View Rate %',
                 'count': 'Match Count',
-                'km_avg': 'KM Average'
+                'km_avg': 'KM Average',
+                'mutual_match': 'Mutual Match %'
             }[x],
             horizontal=True
         )
 
+        # Build all likes set from FULL matches for mutual match detection
+        all_likes_set = set()  # (current_user_id, matched_user_id) where is_liked = 'liked'
+        for m in matches:  # Use full matches, not filtered
+            if m.get('is_liked') == 'liked':
+                all_likes_set.add((m.get('current_user_id'), m.get('matched_user_id')))
+
+        # Find all UNIQUE mutual pairs (count each pair once, regardless of which record we see)
+        # A mutual pair exists when (a, b) and (b, a) both exist in all_likes_set
+        mutual_pairs = set()  # Store as (min_id, max_id) tuples to ensure uniqueness
+        for (a, b) in all_likes_set:
+            if (b, a) in all_likes_set:
+                # Store as ordered pair to avoid duplicates
+                pair = (min(a, b), max(a, b))
+                mutual_pairs.add(pair)
+
         # Build 3x3 matrix data
-        matrix_data = {}  # (viewer_tier, candidate_tier) -> {matches, viewed, liked, km_values}
+        matrix_data = {}  # (viewer_tier, candidate_tier) -> {matches, viewed, liked, km_values, mutual}
 
         for vt in [1, 2, 3]:
             for ct in [1, 2, 3]:
-                matrix_data[(vt, ct)] = {'matches': 0, 'viewed': 0, 'liked': 0, 'km_values': []}
+                matrix_data[(vt, ct)] = {'matches': 0, 'viewed': 0, 'liked': 0, 'km_values': [], 'mutual': 0}
+
+        # Count mutual matches symmetrically - each unique pair contributes to both cells
+        # No gender filter on mutual matches - same for all/male/female
+        for (user_a, user_b) in mutual_pairs:
+            tier_a = user_lookup.get(user_a, {}).get('tier') or matched_user_lookup.get(user_a, {}).get('tier')
+            tier_b = user_lookup.get(user_b, {}).get('tier') or matched_user_lookup.get(user_b, {}).get('tier')
+
+            if tier_a in [1, 2, 3] and tier_b in [1, 2, 3]:
+                # Count in both directions for symmetry
+                matrix_data[(tier_a, tier_b)]['mutual'] += 1
+                if tier_a != tier_b:  # Avoid double counting same-tier pairs
+                    matrix_data[(tier_b, tier_a)]['mutual'] += 1
 
         for m in filtered_matches:
             viewer_id = m.get('current_user_id')
@@ -1469,8 +1497,8 @@ with tab5:
                 if m.get('is_liked') == 'liked':
                     matrix_data[key]['liked'] += 1
 
-        # Build matrix for display
-        matrix_values = []
+        # Build matrix for display - collect raw values first
+        matrix_raw = []
         for vt in [1, 2, 3]:
             row = []
             for ct in [1, 2, 3]:
@@ -1478,51 +1506,100 @@ with tab5:
                 if matrix_metric == 'count':
                     row.append(data['matches'])
                 elif matrix_metric == 'view_rate':
-                    rate = (data['viewed'] / data['matches'] * 100) if data['matches'] > 0 else 0
-                    row.append(round(rate, 1))
+                    row.append(data['viewed'])
                 elif matrix_metric == 'like_rate':
-                    rate = (data['liked'] / data['viewed'] * 100) if data['viewed'] > 0 else 0
-                    row.append(round(rate, 1))
+                    row.append(data['liked'])
                 elif matrix_metric == 'km_avg':
-                    avg = sum(data['km_values']) / len(data['km_values']) if data['km_values'] else 0
-                    row.append(round(avg, 3))
-            matrix_values.append(row)
+                    row.append(sum(data['km_values']) if data['km_values'] else 0)
+                elif matrix_metric == 'mutual_match':
+                    row.append(data['mutual'])
+            matrix_raw.append(row)
 
-        # Create heatmap
-        matrix_df = pd.DataFrame(
-            matrix_values,
-            index=['Viewer T1', 'Viewer T2', 'Viewer T3'],
-            columns=['Candidate T1', 'Candidate T2', 'Candidate T3']
-        )
+        # Convert to row percentages (each row sums to 100%)
+        matrix_values = []
+        for row in matrix_raw:
+            row_total = sum(row)
+            if row_total > 0:
+                matrix_values.append([round(val / row_total * 100, 1) for val in row])
+            else:
+                matrix_values.append([0, 0, 0])
 
-        fig_matrix = px.imshow(
-            matrix_values,
-            x=['Candidate T1', 'Candidate T2', 'Candidate T3'],
-            y=['Viewer T1', 'Viewer T2', 'Viewer T3'],
-            text_auto=True,
-            color_continuous_scale='RdYlGn' if matrix_metric in ['like_rate', 'view_rate'] else 'Blues',
-            aspect='equal'
-        )
+        # Metric explanations
+        metric_explanations = {
+            'like_rate': "**How to read:** For each viewer tier, shows what % of their total likes went to each candidate tier. Each row sums to 100%.",
+            'view_rate': "**How to read:** For each viewer tier, shows what % of their total views went to each candidate tier. Each row sums to 100%.",
+            'count': "**How to read:** For each viewer tier, shows what % of their total matches were with each candidate tier. Each row sums to 100%.",
+            'km_avg': "**How to read:** For each viewer tier, shows what % of their total KM clicks went to each candidate tier. Each row sums to 100%.",
+            'mutual_match': "**How to read:** Shows mutual matches between tiers. Matrix is symmetric (T1-T2 = T2-T1) since mutual match is bidirectional. Absolute values show actual pair counts. Same for all genders."
+        }
 
         metric_label = {
-            'like_rate': 'Like Rate %',
-            'view_rate': 'View Rate %',
-            'count': 'Match Count',
-            'km_avg': 'KM Average'
+            'like_rate': 'Like Distribution %',
+            'view_rate': 'View Distribution %',
+            'count': 'Match Distribution %',
+            'km_avg': 'KM Distribution %',
+            'mutual_match': 'Mutual Match Distribution %'
         }[matrix_metric]
 
-        fig_matrix.update_layout(
-            title=f"Tier Interaction: {metric_label}",
-            height=400,
-            xaxis_title="Candidate Tier",
-            yaxis_title="Viewer Tier"
-        )
+        # Show explanation
+        st.markdown(metric_explanations[matrix_metric])
 
-        st.plotly_chart(fig_matrix, use_container_width=True)
+        # Create two columns for percentage and absolute matrices
+        col_pct, col_abs = st.columns(2)
 
-        # Show raw data table
-        st.markdown("**Raw Matrix Values:**")
-        st.dataframe(matrix_df, use_container_width=True)
+        with col_pct:
+            # Percentage heatmap
+            matrix_df_pct = pd.DataFrame(
+                matrix_values,
+                index=['Viewer T1', 'Viewer T2', 'Viewer T3'],
+                columns=['Candidate T1', 'Candidate T2', 'Candidate T3']
+            )
+
+            fig_pct = px.imshow(
+                matrix_values,
+                x=['Candidate T1', 'Candidate T2', 'Candidate T3'],
+                y=['Viewer T1', 'Viewer T2', 'Viewer T3'],
+                text_auto=True,
+                color_continuous_scale='RdYlGn',
+                aspect='equal'
+            )
+
+            fig_pct.update_layout(
+                title=f"{metric_label} (Row %)",
+                height=350,
+                xaxis_title="Candidate Tier",
+                yaxis_title="Viewer Tier"
+            )
+
+            st.plotly_chart(fig_pct, use_container_width=True)
+            st.dataframe(matrix_df_pct, use_container_width=True)
+
+        with col_abs:
+            # Absolute values heatmap
+            matrix_df_abs = pd.DataFrame(
+                matrix_raw,
+                index=['Viewer T1', 'Viewer T2', 'Viewer T3'],
+                columns=['Candidate T1', 'Candidate T2', 'Candidate T3']
+            )
+
+            fig_abs = px.imshow(
+                matrix_raw,
+                x=['Candidate T1', 'Candidate T2', 'Candidate T3'],
+                y=['Viewer T1', 'Viewer T2', 'Viewer T3'],
+                text_auto=True,
+                color_continuous_scale='Blues',
+                aspect='equal'
+            )
+
+            fig_abs.update_layout(
+                title=f"{metric_label} (Absolute)",
+                height=350,
+                xaxis_title="Candidate Tier",
+                yaxis_title="Viewer Tier"
+            )
+
+            st.plotly_chart(fig_abs, use_container_width=True)
+            st.dataframe(matrix_df_abs, use_container_width=True)
 
         # Insights
         st.markdown("---")
