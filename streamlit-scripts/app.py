@@ -4,6 +4,7 @@ All admin tools accessible from one place.
 """
 import streamlit as st
 from streamlit_oauth import OAuth2Component
+import extra_streamlit_components as stx
 
 # --- Page Config (must be first) ---
 st.set_page_config(
@@ -12,6 +13,13 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- Cookie Manager for persistent auth ---
+@st.cache_resource
+def get_cookie_manager():
+    return stx.CookieManager()
+
+cookie_manager = get_cookie_manager()
 
 # --- Google OAuth Configuration (from .streamlit/secrets.toml) ---
 GOOGLE_CLIENT_ID = st.secrets["auth"]["google"]["client_id"]
@@ -29,10 +37,10 @@ def check_access(email: str) -> bool:
     return email_domain in ALLOWED_DOMAINS
 
 # --- Authentication ---
-if "user_email" not in st.session_state:
-    st.session_state.user_email = None
+# Try to get email from cookie first
+user_email = cookie_manager.get("user_email")
 
-if st.session_state.user_email is None:
+if user_email is None:
     # Hide sidebar when not logged in
     st.markdown("""
         <style>
@@ -73,13 +81,14 @@ if st.session_state.user_email is None:
             "https://www.googleapis.com/oauth2/v3/userinfo",
             headers={"Authorization": f"Bearer {access_token}"}
         ).json()
-        st.session_state.user_email = user_info.get("email")
+        email = user_info.get("email")
+        # Store in cookie (expires in 7 days)
+        cookie_manager.set("user_email", email, max_age=60*60*24*7)
         st.rerun()
 
     st.stop()
 
 # Check if user's email is allowed
-user_email = st.session_state.user_email
 if not check_access(user_email):
     # Hide sidebar for unauthorized users
     st.markdown("""
@@ -92,7 +101,7 @@ if not check_access(user_email):
     st.error(f"Access denied. Your email ({user_email}) is not authorized.")
     st.write("Please contact an administrator to request access.")
     if st.button("Sign out"):
-        st.session_state.user_email = None
+        cookie_manager.delete("user_email")
         st.rerun()
     st.stop()
 
@@ -100,7 +109,7 @@ if not check_access(user_email):
 with st.sidebar:
     st.write(f"Logged in as: **{user_email}**")
     if st.button("Sign out"):
-        st.session_state.user_email = None
+        cookie_manager.delete("user_email")
         st.rerun()
 
 # --- Define all pages ---
