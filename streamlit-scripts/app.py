@@ -4,7 +4,6 @@ All admin tools accessible from one place.
 """
 import streamlit as st
 from streamlit_oauth import OAuth2Component
-import extra_streamlit_components as stx
 
 # --- Page Config (must be first) ---
 st.set_page_config(
@@ -30,13 +29,12 @@ def check_access(email: str) -> bool:
     return email_domain in ALLOWED_DOMAINS
 
 # --- Authentication ---
-cookie_manager = stx.CookieManager()
-
-# Get user email from cookie
-user_email = cookie_manager.get(cookie="user_email")
+# Use session state for auth
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
 
 # Check if user is logged in
-if not user_email:
+if not st.session_state.user_email:
     # Hide sidebar when not logged in
     st.markdown("""
         <style>
@@ -77,13 +75,13 @@ if not user_email:
             "https://www.googleapis.com/oauth2/v3/userinfo",
             headers={"Authorization": f"Bearer {access_token}"}
         ).json()
-        email = user_info.get("email")
-        cookie_manager.set("user_email", email, key="set_email")
+        st.session_state.user_email = user_info.get("email")
         st.rerun()
 
     st.stop()
 
 # Check if user's email is allowed
+user_email = st.session_state.user_email
 if not check_access(user_email):
     # Hide sidebar for unauthorized users
     st.markdown("""
@@ -96,7 +94,7 @@ if not check_access(user_email):
     st.error(f"Access denied. Your email ({user_email}) is not authorized.")
     st.write("Please contact an administrator to request access.")
     if st.button("Sign out", key="signout_denied"):
-        cookie_manager.delete("user_email", key="delete_email_denied")
+        st.session_state.user_email = None
         st.rerun()
     st.stop()
 
@@ -104,7 +102,7 @@ if not check_access(user_email):
 with st.sidebar:
     st.write(f"Logged in as: **{user_email}**")
     if st.button("Sign out", key="signout_sidebar"):
-        cookie_manager.delete("user_email", key="delete_email_sidebar")
+        st.session_state.user_email = None
         st.rerun()
 
 # --- Define all pages ---
