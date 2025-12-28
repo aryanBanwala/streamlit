@@ -17,7 +17,7 @@ sys.path.insert(0, parent_dir)
 from dependencies import get_supabase_client
 
 # Constants
-BATCH_SIZE = 100      # 100 rows per batch
+BATCH_SIZE = 250      # 250 rows per batch
 BATCH_DELAY = 0.2     # 0.2 seconds between batches
 
 # Data folder path

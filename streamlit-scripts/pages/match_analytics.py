@@ -504,8 +504,9 @@ with stat_col2:
 with stat_col3:
     st.metric("Dates Selected", len(st.session_state.selected_dates))
 with stat_col4:
-    viewed_count = sum(1 for m in filtered_matches if m.get('is_viewed'))
-    view_rate = (viewed_count / total_matches * 100) if total_matches > 0 else 0
+    # User-level view rate: users who viewed at least 1 / total users
+    users_who_viewed = set(m.get('current_user_id') for m in filtered_matches if m.get('is_viewed'))
+    view_rate = (len(users_who_viewed) / unique_users * 100) if unique_users > 0 else 0
     st.metric("View Rate", f"{view_rate:.1f}%")
 
 st.markdown("---")
@@ -616,33 +617,51 @@ with tab1:
         def calc_pct(val, base):
             return (val / base * 100) if base > 0 else 0
 
-        # Build funnel data with tooltips
+        # Filter metadata by gender (but tier comes after metadata, so no tier filter here)
+        gender_filter = st.session_state.gender_filter
+        if gender_filter == 'male':
+            filtered_metadata = [u for u in metadata if u.get('gender') == 'male']
+        elif gender_filter == 'female':
+            filtered_metadata = [u for u in metadata if u.get('gender') == 'female']
+        else:
+            filtered_metadata = metadata
+
+        total_users_metadata = len(filtered_metadata)
+
+        # Build funnel data with tooltips (Absolute % based on metadata count)
         funnel_data = [
+            {
+                'Stage': 'Users with Metadata',
+                'Count': total_users_metadata,
+                'Absolute %': 100.0,
+                'Relative %': '-',
+                'tooltip': 'Users with profile in user_metadata table (filtered by gender)'
+            },
             {
                 'Stage': 'Users with Matches',
                 'Count': users_with_matches,
-                'Absolute %': 100.0,
-                'Relative %': '-',
-                'tooltip': 'Total unique users who received matches in selected date range'
+                'Absolute %': calc_pct(users_with_matches, total_users_metadata),
+                'Relative %': calc_pct(users_with_matches, total_users_metadata),
+                'tooltip': 'Users who received at least 1 match in selected date range'
             },
             {
                 'Stage': 'Users who Viewed',
                 'Count': len(users_viewed),
-                'Absolute %': calc_pct(len(users_viewed), users_with_matches),
+                'Absolute %': calc_pct(len(users_viewed), total_users_metadata),
                 'Relative %': calc_pct(len(users_viewed), users_with_matches),
                 'tooltip': 'Users who opened and viewed at least 1 match (is_viewed = true)'
             },
             {
                 'Stage': 'Users who Engaged (KM > 0)',
                 'Count': len(users_engaged),
-                'Absolute %': calc_pct(len(users_engaged), users_with_matches),
+                'Absolute %': calc_pct(len(users_engaged), total_users_metadata),
                 'Relative %': calc_pct(len(users_engaged), len(users_viewed)) if len(users_viewed) > 0 else 0,
                 'tooltip': 'Users who clicked "Know More" at least once on any match (know_more_count > 0)'
             },
             {
                 'Stage': 'Users who Decided',
                 'Count': len(users_decided),
-                'Absolute %': calc_pct(len(users_decided), users_with_matches),
+                'Absolute %': calc_pct(len(users_decided), total_users_metadata),
                 'Relative %': calc_pct(len(users_decided), len(users_engaged)) if len(users_engaged) > 0 else 0,
                 'tooltip': 'Users who took any action - liked, disliked, or passed on at least 1 match (is_liked is not null)'
             },
@@ -653,28 +672,28 @@ with tab1:
             {
                 'Stage': '  - Liked at least 1',
                 'Count': len(users_liked),
-                'Absolute %': calc_pct(len(users_liked), users_with_matches),
+                'Absolute %': calc_pct(len(users_liked), total_users_metadata),
                 'Relative %': calc_pct(len(users_liked), len(users_decided)) if len(users_decided) > 0 else 0,
                 'tooltip': 'Users who liked at least 1 match (is_liked = "liked")'
             },
             {
                 'Stage': '  - Disliked at least 1',
                 'Count': len(users_disliked),
-                'Absolute %': calc_pct(len(users_disliked), users_with_matches),
+                'Absolute %': calc_pct(len(users_disliked), total_users_metadata),
                 'Relative %': calc_pct(len(users_disliked), len(users_decided)) if len(users_decided) > 0 else 0,
                 'tooltip': 'Users who disliked at least 1 match (is_liked = "disliked")'
             },
             {
                 'Stage': '  - Passed at least 1',
                 'Count': len(users_passed),
-                'Absolute %': calc_pct(len(users_passed), users_with_matches),
+                'Absolute %': calc_pct(len(users_passed), total_users_metadata),
                 'Relative %': calc_pct(len(users_passed), len(users_decided)) if len(users_decided) > 0 else 0,
                 'tooltip': 'Users who passed on at least 1 match (is_liked = "passed")'
             },
             {
                 'Stage': '  - Got Match (mutual like)',
                 'Count': len(users_got_match),
-                'Absolute %': calc_pct(len(users_got_match), users_with_matches),
+                'Absolute %': calc_pct(len(users_got_match), total_users_metadata),
                 'Relative %': calc_pct(len(users_got_match), len(users_liked)) if len(users_liked) > 0 else 0,
                 'tooltip': 'Users who liked someone AND that person also liked them back (a->b liked AND b->a liked). Checks reverse like from full table, not just selected dates.'
             },
@@ -684,7 +703,7 @@ with tab1:
             {
                 'Stage': 'Users No Action Yet',
                 'Count': users_no_action,
-                'Absolute %': calc_pct(users_no_action, users_with_matches),
+                'Absolute %': calc_pct(users_no_action, total_users_metadata),
                 'Relative %': '-',
                 'tooltip': 'Users who got matches but never opened/viewed any of them'
             },
@@ -706,25 +725,22 @@ with tab1:
             for row in all_data
         ])
 
-        st.dataframe(df_funnel, use_container_width=True, hide_index=True)
+        # Highlight key metrics with color
+        def highlight_key_rows(row):
+            if row['Stage'] == 'Users with Matches':
+                return ['background-color: rgba(102, 126, 234, 0.3)'] * len(row)
+            elif row['Stage'] == '  - Got Match (mutual like)':
+                return ['background-color: rgba(33, 195, 84, 0.3)'] * len(row)
+            return [''] * len(row)
+
+        styled_df = df_funnel.style.apply(highlight_key_rows, axis=1)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
         # Show tooltips/explanations in an expander
         with st.expander("What do these metrics mean?"):
             for row in all_data:
                 st.markdown(f"**{row['Stage'].strip()}**: {row['tooltip']}")
 
-        # Key insights
-        st.markdown("#### Key Insights")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            view_rate = calc_pct(len(users_viewed), users_with_matches)
-            st.metric("View Rate", f"{view_rate:.1f}%", help="% of users who viewed at least 1 match")
-        with col2:
-            engage_rate = calc_pct(len(users_engaged), len(users_viewed)) if len(users_viewed) > 0 else 0
-            st.metric("Engagement Rate", f"{engage_rate:.1f}%", help="% of viewers who clicked Know More")
-        with col3:
-            like_rate = calc_pct(len(users_liked), len(users_decided)) if len(users_decided) > 0 else 0
-            st.metric("Like Rate", f"{like_rate:.1f}%", help="% of deciders who liked someone")
 
 
 # ============================================
