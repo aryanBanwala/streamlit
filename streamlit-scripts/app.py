@@ -15,11 +15,7 @@ st.set_page_config(
 )
 
 # --- Cookie Manager for persistent auth ---
-@st.cache_resource
-def get_cookie_manager():
-    return stx.CookieManager()
-
-cookie_manager = get_cookie_manager()
+cookie_manager = stx.CookieManager(key="auth_cookies")
 
 # --- Google OAuth Configuration (from .streamlit/secrets.toml) ---
 GOOGLE_CLIENT_ID = st.secrets["auth"]["google"]["client_id"]
