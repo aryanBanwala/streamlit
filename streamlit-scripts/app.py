@@ -14,11 +14,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# --- Cookie Manager (cached to avoid re-initialization) ---
-@st.cache_resource(hash_funcs={stx.CookieManager: id})
-def get_manager():
-    return stx.CookieManager()
-
 # --- Google OAuth Configuration (from .streamlit/secrets.toml) ---
 GOOGLE_CLIENT_ID = st.secrets["auth"]["google"]["client_id"]
 GOOGLE_CLIENT_SECRET = st.secrets["auth"]["google"]["client_secret"]
@@ -35,7 +30,7 @@ def check_access(email: str) -> bool:
     return email_domain in ALLOWED_DOMAINS
 
 # --- Authentication ---
-cookie_manager = get_manager()
+cookie_manager = stx.CookieManager()
 
 # Get user email from cookie
 user_email = cookie_manager.get(cookie="user_email")
