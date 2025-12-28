@@ -53,11 +53,22 @@ st.caption("Search users and view their chat messages")
 def fetch_all_users():
     """Fetch users from user_metadata (name, gender) and user_data (email).
     Only returns users whose user_id exists in user_metadata.
+    Uses pagination to handle large tables.
     """
     try:
-        # Fetch from user_metadata (name, gender)
-        metadata_res = supabase.table('user_metadata').select('user_id, name, gender').execute()
-        metadata_list = metadata_res.data if metadata_res.data else []
+        # Fetch from user_metadata with pagination
+        metadata_list = []
+        page_size = 1000
+        offset = 0
+
+        while True:
+            metadata_res = supabase.table('user_metadata').select('user_id, name, gender').range(offset, offset + page_size - 1).execute()
+            batch = metadata_res.data if metadata_res.data else []
+            metadata_list.extend(batch)
+
+            if len(batch) < page_size:
+                break
+            offset += page_size
 
         if not metadata_list:
             return []
@@ -65,9 +76,14 @@ def fetch_all_users():
         # Get all user_ids from metadata
         user_ids = [u['user_id'] for u in metadata_list]
 
-        # Fetch emails from user_data for these user_ids
-        user_data_res = supabase.table('user_data').select('user_id, user_email').in_('user_id', user_ids).execute()
-        user_data_list = user_data_res.data if user_data_res.data else []
+        # Fetch emails from user_data with pagination (in batches of 500 for IN clause)
+        user_data_list = []
+        batch_size = 500
+        for i in range(0, len(user_ids), batch_size):
+            batch_ids = user_ids[i:i + batch_size]
+            user_data_res = supabase.table('user_data').select('user_id, user_email').in_('user_id', batch_ids).execute()
+            if user_data_res.data:
+                user_data_list.extend(user_data_res.data)
 
         # Create email lookup map
         email_map = {u['user_id']: u['user_email'] for u in user_data_list}
