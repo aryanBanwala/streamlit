@@ -47,6 +47,7 @@ Thumbs.db
 
 # Streamlit
 .streamlit/secrets.toml
+streamlit-scripts/.streamlit/secrets.toml
 
 # Claude
 .claude/
