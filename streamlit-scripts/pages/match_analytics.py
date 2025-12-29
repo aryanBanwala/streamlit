@@ -24,7 +24,13 @@ from services.match_analytics import (
     save_json_files,
     load_json_files,
     get_available_dates,
-    filter_data
+    filter_data,
+    # Retention analytics functions
+    build_likes_set,
+    get_retention_dates,
+    get_users_by_retention_criteria,
+    calculate_retention_matrix,
+    calculate_user_transitions
 )
 
 # --- Page Title ---
@@ -504,8 +510,9 @@ with stat_col2:
 with stat_col3:
     st.metric("Dates Selected", len(st.session_state.selected_dates))
 with stat_col4:
-    viewed_count = sum(1 for m in filtered_matches if m.get('is_viewed'))
-    view_rate = (viewed_count / total_matches * 100) if total_matches > 0 else 0
+    # User-level view rate: users who viewed at least 1 / total users
+    users_who_viewed = set(m.get('current_user_id') for m in filtered_matches if m.get('is_viewed'))
+    view_rate = (len(users_who_viewed) / unique_users * 100) if unique_users > 0 else 0
     st.metric("View Rate", f"{view_rate:.1f}%")
 
 st.markdown("---")
@@ -519,9 +526,9 @@ for user in metadata:
     }
 
 # --- METRIC TABS ---
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "1. Funnel", "2. Hours", "3. Time", "4. Rank",
-    "5. Tier", "6. Dates", "7. KM", "8. Ghost"
+    "5. Tier", "6. Dates", "7. KM", "8. Ghost", "9. Retention"
 ])
 
 
@@ -616,33 +623,51 @@ with tab1:
         def calc_pct(val, base):
             return (val / base * 100) if base > 0 else 0
 
-        # Build funnel data with tooltips
+        # Filter metadata by gender (but tier comes after metadata, so no tier filter here)
+        gender_filter = st.session_state.gender_filter
+        if gender_filter == 'male':
+            filtered_metadata = [u for u in metadata if u.get('gender') == 'male']
+        elif gender_filter == 'female':
+            filtered_metadata = [u for u in metadata if u.get('gender') == 'female']
+        else:
+            filtered_metadata = metadata
+
+        total_users_metadata = len(filtered_metadata)
+
+        # Build funnel data with tooltips (Absolute % based on metadata count)
         funnel_data = [
+            {
+                'Stage': 'Users with Metadata',
+                'Count': total_users_metadata,
+                'Absolute %': 100.0,
+                'Relative %': '-',
+                'tooltip': 'Users with profile in user_metadata table (filtered by gender)'
+            },
             {
                 'Stage': 'Users with Matches',
                 'Count': users_with_matches,
-                'Absolute %': 100.0,
-                'Relative %': '-',
-                'tooltip': 'Total unique users who received matches in selected date range'
+                'Absolute %': calc_pct(users_with_matches, total_users_metadata),
+                'Relative %': calc_pct(users_with_matches, total_users_metadata),
+                'tooltip': 'Users who received at least 1 match in selected date range'
             },
             {
                 'Stage': 'Users who Viewed',
                 'Count': len(users_viewed),
-                'Absolute %': calc_pct(len(users_viewed), users_with_matches),
+                'Absolute %': calc_pct(len(users_viewed), total_users_metadata),
                 'Relative %': calc_pct(len(users_viewed), users_with_matches),
                 'tooltip': 'Users who opened and viewed at least 1 match (is_viewed = true)'
             },
             {
                 'Stage': 'Users who Engaged (KM > 0)',
                 'Count': len(users_engaged),
-                'Absolute %': calc_pct(len(users_engaged), users_with_matches),
+                'Absolute %': calc_pct(len(users_engaged), total_users_metadata),
                 'Relative %': calc_pct(len(users_engaged), len(users_viewed)) if len(users_viewed) > 0 else 0,
                 'tooltip': 'Users who clicked "Know More" at least once on any match (know_more_count > 0)'
             },
             {
                 'Stage': 'Users who Decided',
                 'Count': len(users_decided),
-                'Absolute %': calc_pct(len(users_decided), users_with_matches),
+                'Absolute %': calc_pct(len(users_decided), total_users_metadata),
                 'Relative %': calc_pct(len(users_decided), len(users_engaged)) if len(users_engaged) > 0 else 0,
                 'tooltip': 'Users who took any action - liked, disliked, or passed on at least 1 match (is_liked is not null)'
             },
@@ -653,28 +678,28 @@ with tab1:
             {
                 'Stage': '  - Liked at least 1',
                 'Count': len(users_liked),
-                'Absolute %': calc_pct(len(users_liked), users_with_matches),
+                'Absolute %': calc_pct(len(users_liked), total_users_metadata),
                 'Relative %': calc_pct(len(users_liked), len(users_decided)) if len(users_decided) > 0 else 0,
                 'tooltip': 'Users who liked at least 1 match (is_liked = "liked")'
             },
             {
                 'Stage': '  - Disliked at least 1',
                 'Count': len(users_disliked),
-                'Absolute %': calc_pct(len(users_disliked), users_with_matches),
+                'Absolute %': calc_pct(len(users_disliked), total_users_metadata),
                 'Relative %': calc_pct(len(users_disliked), len(users_decided)) if len(users_decided) > 0 else 0,
                 'tooltip': 'Users who disliked at least 1 match (is_liked = "disliked")'
             },
             {
                 'Stage': '  - Passed at least 1',
                 'Count': len(users_passed),
-                'Absolute %': calc_pct(len(users_passed), users_with_matches),
+                'Absolute %': calc_pct(len(users_passed), total_users_metadata),
                 'Relative %': calc_pct(len(users_passed), len(users_decided)) if len(users_decided) > 0 else 0,
                 'tooltip': 'Users who passed on at least 1 match (is_liked = "passed")'
             },
             {
                 'Stage': '  - Got Match (mutual like)',
                 'Count': len(users_got_match),
-                'Absolute %': calc_pct(len(users_got_match), users_with_matches),
+                'Absolute %': calc_pct(len(users_got_match), total_users_metadata),
                 'Relative %': calc_pct(len(users_got_match), len(users_liked)) if len(users_liked) > 0 else 0,
                 'tooltip': 'Users who liked someone AND that person also liked them back (a->b liked AND b->a liked). Checks reverse like from full table, not just selected dates.'
             },
@@ -684,7 +709,7 @@ with tab1:
             {
                 'Stage': 'Users No Action Yet',
                 'Count': users_no_action,
-                'Absolute %': calc_pct(users_no_action, users_with_matches),
+                'Absolute %': calc_pct(users_no_action, total_users_metadata),
                 'Relative %': '-',
                 'tooltip': 'Users who got matches but never opened/viewed any of them'
             },
@@ -706,25 +731,22 @@ with tab1:
             for row in all_data
         ])
 
-        st.dataframe(df_funnel, use_container_width=True, hide_index=True)
+        # Highlight key metrics with color
+        def highlight_key_rows(row):
+            if row['Stage'] == 'Users with Matches':
+                return ['background-color: rgba(102, 126, 234, 0.3)'] * len(row)
+            elif row['Stage'] == '  - Got Match (mutual like)':
+                return ['background-color: rgba(33, 195, 84, 0.3)'] * len(row)
+            return [''] * len(row)
+
+        styled_df = df_funnel.style.apply(highlight_key_rows, axis=1)
+        st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
         # Show tooltips/explanations in an expander
         with st.expander("What do these metrics mean?"):
             for row in all_data:
                 st.markdown(f"**{row['Stage'].strip()}**: {row['tooltip']}")
 
-        # Key insights
-        st.markdown("#### Key Insights")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            view_rate = calc_pct(len(users_viewed), users_with_matches)
-            st.metric("View Rate", f"{view_rate:.1f}%", help="% of users who viewed at least 1 match")
-        with col2:
-            engage_rate = calc_pct(len(users_engaged), len(users_viewed)) if len(users_viewed) > 0 else 0
-            st.metric("Engagement Rate", f"{engage_rate:.1f}%", help="% of viewers who clicked Know More")
-        with col3:
-            like_rate = calc_pct(len(users_liked), len(users_decided)) if len(users_decided) > 0 else 0
-            st.metric("Like Rate", f"{like_rate:.1f}%", help="% of deciders who liked someone")
 
 
 # ============================================
@@ -1415,22 +1437,50 @@ with tab5:
         # Select metric for matrix
         matrix_metric = st.radio(
             "Select metric for matrix:",
-            options=['like_rate', 'view_rate', 'count', 'km_avg'],
+            options=['like_rate', 'view_rate', 'count', 'km_avg', 'mutual_match'],
             format_func=lambda x: {
                 'like_rate': 'Like Rate %',
                 'view_rate': 'View Rate %',
                 'count': 'Match Count',
-                'km_avg': 'KM Average'
+                'km_avg': 'KM Average',
+                'mutual_match': 'Mutual Match %'
             }[x],
             horizontal=True
         )
 
+        # Build all likes set from FULL matches for mutual match detection
+        all_likes_set = set()  # (current_user_id, matched_user_id) where is_liked = 'liked'
+        for m in matches:  # Use full matches, not filtered
+            if m.get('is_liked') == 'liked':
+                all_likes_set.add((m.get('current_user_id'), m.get('matched_user_id')))
+
+        # Find all UNIQUE mutual pairs (count each pair once, regardless of which record we see)
+        # A mutual pair exists when (a, b) and (b, a) both exist in all_likes_set
+        mutual_pairs = set()  # Store as (min_id, max_id) tuples to ensure uniqueness
+        for (a, b) in all_likes_set:
+            if (b, a) in all_likes_set:
+                # Store as ordered pair to avoid duplicates
+                pair = (min(a, b), max(a, b))
+                mutual_pairs.add(pair)
+
         # Build 3x3 matrix data
-        matrix_data = {}  # (viewer_tier, candidate_tier) -> {matches, viewed, liked, km_values}
+        matrix_data = {}  # (viewer_tier, candidate_tier) -> {matches, viewed, liked, km_values, mutual}
 
         for vt in [1, 2, 3]:
             for ct in [1, 2, 3]:
-                matrix_data[(vt, ct)] = {'matches': 0, 'viewed': 0, 'liked': 0, 'km_values': []}
+                matrix_data[(vt, ct)] = {'matches': 0, 'viewed': 0, 'liked': 0, 'km_values': [], 'mutual': 0}
+
+        # Count mutual matches symmetrically - each unique pair contributes to both cells
+        # No gender filter on mutual matches - same for all/male/female
+        for (user_a, user_b) in mutual_pairs:
+            tier_a = user_lookup.get(user_a, {}).get('tier') or matched_user_lookup.get(user_a, {}).get('tier')
+            tier_b = user_lookup.get(user_b, {}).get('tier') or matched_user_lookup.get(user_b, {}).get('tier')
+
+            if tier_a in [1, 2, 3] and tier_b in [1, 2, 3]:
+                # Count in both directions for symmetry
+                matrix_data[(tier_a, tier_b)]['mutual'] += 1
+                if tier_a != tier_b:  # Avoid double counting same-tier pairs
+                    matrix_data[(tier_b, tier_a)]['mutual'] += 1
 
         for m in filtered_matches:
             viewer_id = m.get('current_user_id')
@@ -1453,8 +1503,8 @@ with tab5:
                 if m.get('is_liked') == 'liked':
                     matrix_data[key]['liked'] += 1
 
-        # Build matrix for display
-        matrix_values = []
+        # Build matrix for display - collect raw values first
+        matrix_raw = []
         for vt in [1, 2, 3]:
             row = []
             for ct in [1, 2, 3]:
@@ -1462,51 +1512,100 @@ with tab5:
                 if matrix_metric == 'count':
                     row.append(data['matches'])
                 elif matrix_metric == 'view_rate':
-                    rate = (data['viewed'] / data['matches'] * 100) if data['matches'] > 0 else 0
-                    row.append(round(rate, 1))
+                    row.append(data['viewed'])
                 elif matrix_metric == 'like_rate':
-                    rate = (data['liked'] / data['viewed'] * 100) if data['viewed'] > 0 else 0
-                    row.append(round(rate, 1))
+                    row.append(data['liked'])
                 elif matrix_metric == 'km_avg':
-                    avg = sum(data['km_values']) / len(data['km_values']) if data['km_values'] else 0
-                    row.append(round(avg, 3))
-            matrix_values.append(row)
+                    row.append(sum(data['km_values']) if data['km_values'] else 0)
+                elif matrix_metric == 'mutual_match':
+                    row.append(data['mutual'])
+            matrix_raw.append(row)
 
-        # Create heatmap
-        matrix_df = pd.DataFrame(
-            matrix_values,
-            index=['Viewer T1', 'Viewer T2', 'Viewer T3'],
-            columns=['Candidate T1', 'Candidate T2', 'Candidate T3']
-        )
+        # Convert to row percentages (each row sums to 100%)
+        matrix_values = []
+        for row in matrix_raw:
+            row_total = sum(row)
+            if row_total > 0:
+                matrix_values.append([round(val / row_total * 100, 1) for val in row])
+            else:
+                matrix_values.append([0, 0, 0])
 
-        fig_matrix = px.imshow(
-            matrix_values,
-            x=['Candidate T1', 'Candidate T2', 'Candidate T3'],
-            y=['Viewer T1', 'Viewer T2', 'Viewer T3'],
-            text_auto=True,
-            color_continuous_scale='RdYlGn' if matrix_metric in ['like_rate', 'view_rate'] else 'Blues',
-            aspect='equal'
-        )
+        # Metric explanations
+        metric_explanations = {
+            'like_rate': "**How to read:** For each viewer tier, shows what % of their total likes went to each candidate tier. Each row sums to 100%.",
+            'view_rate': "**How to read:** For each viewer tier, shows what % of their total views went to each candidate tier. Each row sums to 100%.",
+            'count': "**How to read:** For each viewer tier, shows what % of their total matches were with each candidate tier. Each row sums to 100%.",
+            'km_avg': "**How to read:** For each viewer tier, shows what % of their total KM clicks went to each candidate tier. Each row sums to 100%.",
+            'mutual_match': "**How to read:** Shows mutual matches between tiers. Matrix is symmetric (T1-T2 = T2-T1) since mutual match is bidirectional. Absolute values show actual pair counts. Same for all genders."
+        }
 
         metric_label = {
-            'like_rate': 'Like Rate %',
-            'view_rate': 'View Rate %',
-            'count': 'Match Count',
-            'km_avg': 'KM Average'
+            'like_rate': 'Like Distribution %',
+            'view_rate': 'View Distribution %',
+            'count': 'Match Distribution %',
+            'km_avg': 'KM Distribution %',
+            'mutual_match': 'Mutual Match Distribution %'
         }[matrix_metric]
 
-        fig_matrix.update_layout(
-            title=f"Tier Interaction: {metric_label}",
-            height=400,
-            xaxis_title="Candidate Tier",
-            yaxis_title="Viewer Tier"
-        )
+        # Show explanation
+        st.markdown(metric_explanations[matrix_metric])
 
-        st.plotly_chart(fig_matrix, use_container_width=True)
+        # Create two columns for percentage and absolute matrices
+        col_pct, col_abs = st.columns(2)
 
-        # Show raw data table
-        st.markdown("**Raw Matrix Values:**")
-        st.dataframe(matrix_df, use_container_width=True)
+        with col_pct:
+            # Percentage heatmap
+            matrix_df_pct = pd.DataFrame(
+                matrix_values,
+                index=['Viewer T1', 'Viewer T2', 'Viewer T3'],
+                columns=['Candidate T1', 'Candidate T2', 'Candidate T3']
+            )
+
+            fig_pct = px.imshow(
+                matrix_values,
+                x=['Candidate T1', 'Candidate T2', 'Candidate T3'],
+                y=['Viewer T1', 'Viewer T2', 'Viewer T3'],
+                text_auto=True,
+                color_continuous_scale='RdYlGn',
+                aspect='equal'
+            )
+
+            fig_pct.update_layout(
+                title=f"{metric_label} (Row %)",
+                height=350,
+                xaxis_title="Candidate Tier",
+                yaxis_title="Viewer Tier"
+            )
+
+            st.plotly_chart(fig_pct, use_container_width=True)
+            st.dataframe(matrix_df_pct, use_container_width=True)
+
+        with col_abs:
+            # Absolute values heatmap
+            matrix_df_abs = pd.DataFrame(
+                matrix_raw,
+                index=['Viewer T1', 'Viewer T2', 'Viewer T3'],
+                columns=['Candidate T1', 'Candidate T2', 'Candidate T3']
+            )
+
+            fig_abs = px.imshow(
+                matrix_raw,
+                x=['Candidate T1', 'Candidate T2', 'Candidate T3'],
+                y=['Viewer T1', 'Viewer T2', 'Viewer T3'],
+                text_auto=True,
+                color_continuous_scale='Blues',
+                aspect='equal'
+            )
+
+            fig_abs.update_layout(
+                title=f"{metric_label} (Absolute)",
+                height=350,
+                xaxis_title="Candidate Tier",
+                yaxis_title="Viewer Tier"
+            )
+
+            st.plotly_chart(fig_abs, use_container_width=True)
+            st.dataframe(matrix_df_abs, use_container_width=True)
 
         # Insights
         st.markdown("---")
@@ -2364,3 +2463,561 @@ with tab8:
                 st.warning(f"**{ghost_pct:.1f}% are ghost users** - viewing but not acting. May need UX improvements or push notifications.")
             else:
                 st.success(f"**Low ghost rate ({ghost_pct:.1f}%).** Users are making decisions after viewing.")
+
+
+# ============================================
+# TAB 9: RETENTION - User Retention Analytics
+# ============================================
+with tab9:
+    st.markdown("### User Retention Analytics")
+    st.markdown("*Track how users return based on their engagement level*")
+
+    # Info box
+    st.info("**Note:** These filters are INDEPENDENT of the date selection above. Retention analysis uses its own date selection.")
+
+    # Category definitions
+    st.markdown("""
+    | Category | Definition |
+    |----------|------------|
+    | **A** | Viewed/passed only - no likes |
+    | **B** | Liked someone but no mutual match |
+    | **C** | Got a mutual match (both users liked each other) |
+    """)
+
+    st.markdown("---")
+
+    # Build likes_set once for mutual match detection
+    likes_set = build_likes_set(matches)
+
+    # Get available dates from viewed_at (actual activity dates)
+    retention_dates = get_retention_dates(matches)
+
+    if not retention_dates:
+        st.warning("No activity data available.")
+    else:
+        # --- Configuration Section ---
+        st.markdown("#### Filters")
+
+        config_col1, config_col2, config_col3 = st.columns(3)
+
+        with config_col1:
+            return_dates = st.multiselect(
+                "Return Date(s) - check if came back",
+                options=retention_dates,
+                default=[],
+                help="Select dates to check if users returned after their action"
+            )
+
+        with config_col2:
+            ret_gender = st.radio(
+                "Gender",
+                options=['both', 'male', 'female'],
+                format_func=lambda x: x.title(),
+                horizontal=True,
+                key='retention_gender'
+            )
+
+        with config_col3:
+            ret_tier = st.radio(
+                "Tier",
+                options=['all', '1', '2', '3'],
+                format_func=lambda x: 'All' if x == 'all' else f'T{x}',
+                horizontal=True,
+                key='retention_tier'
+            )
+
+        st.markdown("---")
+
+        # ============================================
+        # User List Query Tool (Main Feature)
+        # ============================================
+        st.markdown("#### Find Specific Users")
+        st.markdown("*Query users by category and return behavior*")
+
+        # Query examples
+        with st.expander("Example Queries"):
+            st.markdown("""
+            | Question | Settings |
+            |----------|----------|
+            | Users who came all days but never liked | Category=A, Return=all dates, Logic=AND |
+            | Users who got match & came back | Category=C, Return=pick dates, Logic=AND |
+            | Users who liked but no match, still came back | Category=B, Return=pick dates, Logic=OR |
+            """)
+
+        st.markdown("---")
+
+        # Query filters
+        query_col1, query_col2 = st.columns(2)
+
+        with query_col1:
+            query_category = st.selectbox(
+                "Category to Find",
+                options=['A', 'B', 'C'],
+                format_func=lambda x: {
+                    'A': 'A - Viewed only (never liked/disliked)',
+                    'B': 'B - Liked/disliked but no match',
+                    'C': 'C - Got mutual match'
+                }[x]
+            )
+
+        with query_col2:
+            query_logic = st.radio(
+                "Return Logic for Query",
+                options=['AND', 'OR'],
+                format_func=lambda x: {
+                    'AND': 'Came back on ALL return dates',
+                    'OR': 'Came back on ANY return date'
+                }[x],
+                horizontal=True
+            )
+
+        # Additional filters for each category
+        match_count_op = None
+        match_count_val = None
+        return_count_op = None
+        return_count_val = None
+        like_count_op = None
+        like_count_val = None
+        view_count_op = None
+        view_count_val = None
+
+        if query_category == 'A':
+            st.markdown("##### Additional Filters for Category A")
+            st.caption("Filter users by number of unique viewed dates (users who only viewed/passed, never liked/disliked)")
+            filter_col1, filter_col2 = st.columns(2)
+
+            with filter_col1:
+                view_count_op = st.selectbox(
+                    "Unique Viewed Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='view_count_op',
+                    help="Number of unique dates when user viewed profiles (but never liked/disliked)"
+                )
+            with filter_col2:
+                view_count_val = st.number_input(
+                    "Dates #",
+                    min_value=1,
+                    value=1,
+                    step=1,
+                    key='view_count_val'
+                )
+
+        elif query_category == 'C':
+            st.markdown("##### Additional Filters for Category C")
+            st.caption("Filter users by number of match dates and return dates")
+            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+
+            with filter_col1:
+                match_count_op = st.selectbox(
+                    "Mutual Match Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='match_count_op',
+                    help="Number of unique dates when user got mutual matches"
+                )
+            with filter_col2:
+                match_count_val = st.number_input(
+                    "Dates #",
+                    min_value=1,
+                    value=1,
+                    step=1,
+                    key='match_count_val'
+                )
+
+            with filter_col3:
+                return_count_op = st.selectbox(
+                    "Returned Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='return_count_op',
+                    help="Number of dates user came back after first match. Use >= 0 to include users who may or may not have returned."
+                )
+            with filter_col4:
+                return_count_val = st.number_input(
+                    "Dates #",
+                    min_value=0,
+                    value=1,
+                    step=1,
+                    key='return_count_val',
+                    help="0 = include users who never came back AFTER their match date"
+                )
+
+        elif query_category == 'B':
+            st.markdown("##### Additional Filters for Category B")
+            st.caption("Filter users by number of unique liked user dates and return dates")
+            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+
+            with filter_col1:
+                like_count_op = st.selectbox(
+                    "Unique Liked User Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='like_count_op',
+                    help="Number of unique dates when user liked someone (but no mutual match)"
+                )
+            with filter_col2:
+                like_count_val = st.number_input(
+                    "Dates #",
+                    min_value=1,
+                    value=1,
+                    step=1,
+                    key='like_count_val'
+                )
+
+            with filter_col3:
+                return_count_op = st.selectbox(
+                    "Returned Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='return_count_op_b',
+                    help="Number of dates user came back after first like. Use >= 0 to include users who may or may not have returned."
+                )
+            with filter_col4:
+                return_count_val = st.number_input(
+                    "Dates #",
+                    min_value=0,
+                    value=1,
+                    step=1,
+                    key='return_count_val_b',
+                    help="0 = include users who never came back AFTER their first like date"
+                )
+
+        # Run query button
+        if st.button("Find Users", type="primary"):
+            with st.spinner("Searching..."):
+                # Determine return dates for query
+                query_return_dates = return_dates
+                and_logic_query = (query_logic == 'AND')
+
+                matching_users = get_users_by_retention_criteria(
+                    category=query_category,
+                    category_dates=[],  # Not needed for User List - always use highest category
+                    return_dates=query_return_dates,
+                    and_logic=and_logic_query,
+                    use_highest_category=True,  # Always use highest category
+                    matches=matches,
+                    metadata=metadata,
+                    likes_set=likes_set,
+                    gender=ret_gender,
+                    tier=ret_tier,
+                    match_count_op=match_count_op,
+                    match_count_val=match_count_val,
+                    return_count_op=return_count_op,
+                    return_count_val=return_count_val,
+                    like_count_op=like_count_op,
+                    like_count_val=like_count_val,
+                    view_count_op=view_count_op,
+                    view_count_val=view_count_val
+                )
+
+            st.markdown(f"### Found {len(matching_users)} users")
+
+            # Build explanation paragraph
+            category_desc = {
+                'A': 'only viewed/passed profiles (never liked or disliked anyone)',
+                'B': 'liked/disliked someone but did NOT get a mutual match',
+                'C': 'got a mutual match (both users liked each other)'
+            }[query_category]
+
+            # For Category C, explain that only dates AFTER match_date are considered
+            if query_category == 'C':
+                if query_logic == 'AND':
+                    return_desc = f"These users came back on ALL dates **after their first match** (from selected dates: {', '.join(return_dates) if return_dates else 'none'})."
+                else:
+                    return_desc = f"These users came back on at least ONE date **after their first match** (from selected dates: {', '.join(return_dates) if return_dates else 'none'})."
+            elif query_category == 'B':
+                if query_logic == 'AND':
+                    return_desc = f"These users came back on ALL dates **after their first like** (from selected dates: {', '.join(return_dates) if return_dates else 'none'})."
+                else:
+                    return_desc = f"These users came back on at least ONE date **after their first like** (from selected dates: {', '.join(return_dates) if return_dates else 'none'})."
+            else:
+                if query_logic == 'AND':
+                    return_desc = f"These users came back on ALL of these dates: {', '.join(return_dates) if return_dates else 'none selected'}."
+                else:
+                    return_desc = f"These users came back on at least ONE of these dates: {', '.join(return_dates) if return_dates else 'none selected'}."
+
+            filter_desc = ""
+            if ret_gender != 'both':
+                filter_desc += f" Gender: {ret_gender}."
+            if ret_tier != 'all':
+                filter_desc += f" Tier: {ret_tier}."
+
+            # Category-specific explanation
+            if query_category == 'C':
+                # Build filter description for Category C
+                filter_parts = []
+                if match_count_op and match_count_val is not None:
+                    filter_parts.append(f"mutual_match_dates {match_count_op} {match_count_val}")
+                if return_count_op and return_count_val is not None:
+                    filter_parts.append(f"returned_dates {return_count_op} {return_count_val}")
+
+                filter_str = f"\n- **Additional filters:** {', '.join(filter_parts)}" if filter_parts else ""
+
+                # Special note for return_count_val = 0
+                zero_return_note = ""
+                if return_count_val == 0:
+                    zero_return_note = "\n- **Note:** Including users who got match but never came back after that day"
+
+                explanation = f"""
+**What this means:**
+
+These are users who **{category_desc}** (based on their overall behavior).
+
+{return_desc}{filter_desc}
+
+**How it works for Category C:**
+- `match_dates`: ALL dates when user got mutual matches
+- `match_dates_count`: Number of unique dates when user got matches
+- `returned_on`: Only dates > first match_date (user came back AFTER getting match)
+- `return_dates_count`: Number of dates user came back after first match (0 = never came back after match){filter_str}{zero_return_note}
+            """
+            elif query_category == 'B':
+                # Build filter description for Category B
+                filter_parts = []
+                if like_count_op and like_count_val is not None:
+                    filter_parts.append(f"unique_liked_user_dates {like_count_op} {like_count_val}")
+                if return_count_op and return_count_val is not None:
+                    filter_parts.append(f"returned_dates {return_count_op} {return_count_val}")
+
+                filter_str = f"\n- **Additional filters:** {', '.join(filter_parts)}" if filter_parts else ""
+
+                # Special note for return_count_val = 0
+                zero_return_note = ""
+                if return_count_val == 0:
+                    zero_return_note = "\n- **Note:** Including users who liked but never came back after that day"
+
+                explanation = f"""
+**What this means:**
+
+These are users who **{category_desc}** (based on their overall behavior).
+
+{return_desc}{filter_desc}
+
+**How it works for Category B:**
+- `like_dates`: ALL dates when user liked someone (but no mutual match)
+- `like_dates_count`: Number of unique dates when user liked other users
+- `returned_on`: Only dates > first like_date (user came back AFTER liking)
+- `return_dates_count`: Number of dates user came back after first like (0 = never came back after like){filter_str}{zero_return_note}
+            """
+            else:
+                # Category A
+                filter_parts = []
+                if view_count_op and view_count_val is not None:
+                    filter_parts.append(f"unique_viewed_dates {view_count_op} {view_count_val}")
+
+                filter_str = f"\n- **Additional filters:** {', '.join(filter_parts)}" if filter_parts else ""
+
+                explanation = f"""
+**What this means:**
+
+These are users who **{category_desc}** (based on their overall behavior).
+
+{filter_desc}
+
+**How it works for Category A:**
+- `view_dates`: ALL unique dates when user viewed profiles (but never liked/disliked)
+- `view_dates_count`: Number of unique dates when user viewed profiles{filter_str}
+            """
+
+            st.info(explanation)
+
+            if matching_users:
+                df_users = pd.DataFrame(matching_users)
+                st.dataframe(df_users, hide_index=True)
+
+                # For Category C: Show heatmap matrix of match_dates_count × return_dates_count
+                if query_category == 'C' and len(df_users) > 0:
+                    st.markdown("---")
+                    st.markdown("#### Distribution Matrix: Match Dates × Return Dates")
+
+                    # Get unique values for matrix
+                    match_counts = sorted(df_users['match_dates_count'].unique())
+                    return_counts = sorted(df_users['return_dates_count'].unique())
+
+                    # Build matrix for heatmap (2D array)
+                    z_values = []
+                    for mc in match_counts:
+                        row = []
+                        for rc in return_counts:
+                            count = len(df_users[(df_users['match_dates_count'] == mc) & (df_users['return_dates_count'] == rc)])
+                            row.append(count)
+                        z_values.append(row)
+
+                    # Create heatmap with Plotly
+                    fig_heatmap = go.Figure(data=go.Heatmap(
+                        z=z_values,
+                        x=[str(rc) for rc in return_counts],
+                        y=[f"Match {mc}" for mc in match_counts],
+                        text=z_values,
+                        texttemplate="%{text}",
+                        textfont={"size": 14},
+                        colorscale='RdYlGn_r',  # Red-Yellow-Green reversed (green=high, red=low)
+                        showscale=True,
+                        hoverongaps=False,
+                        hovertemplate='Match Dates: %{y}<br>Return Dates: %{x}<br>Users: %{z}<extra></extra>'
+                    ))
+
+                    fig_heatmap.update_layout(
+                        title=None,
+                        xaxis_title="Return Dates Count",
+                        yaxis_title="Match Dates Count",
+                        height=max(300, len(match_counts) * 60 + 100),
+                        yaxis=dict(autorange='reversed'),  # Put Match 1 at top
+                        margin=dict(l=100, r=50, t=30, b=80)
+                    )
+
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+
+                    # Also show raw data table below
+                    with st.expander("View Raw Matrix Data"):
+                        matrix_data = []
+                        for mc in match_counts:
+                            row = {'Match Dates': mc}
+                            for rc in return_counts:
+                                count = len(df_users[(df_users['match_dates_count'] == mc) & (df_users['return_dates_count'] == rc)])
+                                row[f'Return {rc}'] = count
+                            row['Total'] = len(df_users[df_users['match_dates_count'] == mc])
+                            matrix_data.append(row)
+
+                        # Add totals row
+                        totals_row = {'Match Dates': 'Total'}
+                        for rc in return_counts:
+                            totals_row[f'Return {rc}'] = len(df_users[df_users['return_dates_count'] == rc])
+                        totals_row['Total'] = len(df_users)
+                        matrix_data.append(totals_row)
+
+                        st.dataframe(pd.DataFrame(matrix_data), hide_index=True, use_container_width=True)
+
+                # For Category B: Show heatmap matrix of like_dates_count × return_dates_count
+                elif query_category == 'B' and len(df_users) > 0:
+                    st.markdown("---")
+                    st.markdown("#### Distribution Matrix: Unique Liked Users Dates × Return Dates")
+
+                    # Get unique values for matrix
+                    like_counts = sorted(df_users['like_dates_count'].unique())
+                    return_counts = sorted(df_users['return_dates_count'].unique())
+
+                    # Build matrix for heatmap (2D array)
+                    z_values = []
+                    for lc in like_counts:
+                        row = []
+                        for rc in return_counts:
+                            count = len(df_users[(df_users['like_dates_count'] == lc) & (df_users['return_dates_count'] == rc)])
+                            row.append(count)
+                        z_values.append(row)
+
+                    # Create heatmap with Plotly
+                    fig_heatmap = go.Figure(data=go.Heatmap(
+                        z=z_values,
+                        x=[str(rc) for rc in return_counts],
+                        y=[f"Liked {lc}" for lc in like_counts],
+                        text=z_values,
+                        texttemplate="%{text}",
+                        textfont={"size": 14},
+                        colorscale='RdYlGn_r',  # Red-Yellow-Green reversed (green=high, red=low)
+                        showscale=True,
+                        hoverongaps=False,
+                        hovertemplate='Unique Liked User Dates: %{y}<br>Return Dates: %{x}<br>Users: %{z}<extra></extra>'
+                    ))
+
+                    fig_heatmap.update_layout(
+                        title=None,
+                        xaxis_title="Return Dates Count",
+                        yaxis_title="Unique Liked User Dates Count",
+                        height=max(300, len(like_counts) * 60 + 100),
+                        yaxis=dict(autorange='reversed'),  # Put Liked 1 at top
+                        margin=dict(l=150, r=50, t=30, b=80)
+                    )
+
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+
+                    # Also show raw data table below
+                    with st.expander("View Raw Matrix Data"):
+                        matrix_data = []
+                        for lc in like_counts:
+                            row = {'Unique Liked User Dates': lc}
+                            for rc in return_counts:
+                                count = len(df_users[(df_users['like_dates_count'] == lc) & (df_users['return_dates_count'] == rc)])
+                                row[f'Return {rc}'] = count
+                            row['Total'] = len(df_users[df_users['like_dates_count'] == lc])
+                            matrix_data.append(row)
+
+                        # Add totals row
+                        totals_row = {'Unique Liked User Dates': 'Total'}
+                        for rc in return_counts:
+                            totals_row[f'Return {rc}'] = len(df_users[df_users['return_dates_count'] == rc])
+                        totals_row['Total'] = len(df_users)
+                        matrix_data.append(totals_row)
+
+                        st.dataframe(pd.DataFrame(matrix_data), hide_index=True, use_container_width=True)
+
+                # For Category A: Show distribution of view_dates_count
+                elif query_category == 'A' and len(df_users) > 0:
+                    st.markdown("---")
+                    st.markdown("#### Distribution: Unique Viewed Dates Count")
+
+                    # Get unique values for distribution
+                    view_counts = sorted(df_users['view_dates_count'].unique())
+
+                    # Build data for bar chart
+                    bar_data = []
+                    for vc in view_counts:
+                        count = len(df_users[df_users['view_dates_count'] == vc])
+                        bar_data.append({'View Dates': vc, 'Users': count})
+
+                    # Create bar chart with Plotly
+                    fig_bar = go.Figure(data=go.Bar(
+                        x=[str(d['View Dates']) for d in bar_data],
+                        y=[d['Users'] for d in bar_data],
+                        text=[d['Users'] for d in bar_data],
+                        textposition='outside',
+                        marker_color='#636EFA'
+                    ))
+
+                    fig_bar.update_layout(
+                        title=None,
+                        xaxis_title="Unique Viewed Dates Count",
+                        yaxis_title="Number of Users",
+                        height=400,
+                        margin=dict(l=50, r=50, t=30, b=80)
+                    )
+
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                    # Also show raw data table below
+                    with st.expander("View Raw Distribution Data"):
+                        dist_data = []
+                        for vc in view_counts:
+                            count = len(df_users[df_users['view_dates_count'] == vc])
+                            dist_data.append({'Viewed Dates': str(vc), 'Users': count})
+                        dist_data.append({'Viewed Dates': 'Total', 'Users': len(df_users)})
+                        st.dataframe(pd.DataFrame(dist_data), hide_index=True, use_container_width=True)
+
+                # Export options
+                st.markdown("---")
+                st.markdown("#### Export")
+
+                export_col1, export_col2 = st.columns(2)
+
+                with export_col1:
+                    csv = df_users.to_csv(index=False)
+                    st.download_button(
+                        "Download CSV",
+                        data=csv,
+                        file_name=f"retention_users_{query_category}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+
+                with export_col2:
+                    user_ids = '\n'.join(df_users['user_id'].tolist())
+                    st.download_button(
+                        "Download User IDs",
+                        data=user_ids,
+                        file_name=f"user_ids_{query_category}.txt",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
+            else:
+                st.info("No users found matching the criteria.")
