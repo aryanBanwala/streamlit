@@ -24,7 +24,13 @@ from services.match_analytics import (
     save_json_files,
     load_json_files,
     get_available_dates,
-    filter_data
+    filter_data,
+    # Retention analytics functions
+    build_likes_set,
+    get_retention_dates,
+    get_users_by_retention_criteria,
+    calculate_retention_matrix,
+    calculate_user_transitions
 )
 
 # --- Page Title ---
@@ -520,9 +526,9 @@ for user in metadata:
     }
 
 # --- METRIC TABS ---
-tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8, tab9 = st.tabs([
     "1. Funnel", "2. Hours", "3. Time", "4. Rank",
-    "5. Tier", "6. Dates", "7. KM", "8. Ghost"
+    "5. Tier", "6. Dates", "7. KM", "8. Ghost", "9. Retention"
 ])
 
 
@@ -2457,3 +2463,561 @@ with tab8:
                 st.warning(f"**{ghost_pct:.1f}% are ghost users** - viewing but not acting. May need UX improvements or push notifications.")
             else:
                 st.success(f"**Low ghost rate ({ghost_pct:.1f}%).** Users are making decisions after viewing.")
+
+
+# ============================================
+# TAB 9: RETENTION - User Retention Analytics
+# ============================================
+with tab9:
+    st.markdown("### User Retention Analytics")
+    st.markdown("*Track how users return based on their engagement level*")
+
+    # Info box
+    st.info("**Note:** These filters are INDEPENDENT of the date selection above. Retention analysis uses its own date selection.")
+
+    # Category definitions
+    st.markdown("""
+    | Category | Definition |
+    |----------|------------|
+    | **A** | Viewed/passed only - no likes |
+    | **B** | Liked someone but no mutual match |
+    | **C** | Got a mutual match (both users liked each other) |
+    """)
+
+    st.markdown("---")
+
+    # Build likes_set once for mutual match detection
+    likes_set = build_likes_set(matches)
+
+    # Get available dates from viewed_at (actual activity dates)
+    retention_dates = get_retention_dates(matches)
+
+    if not retention_dates:
+        st.warning("No activity data available.")
+    else:
+        # --- Configuration Section ---
+        st.markdown("#### Filters")
+
+        config_col1, config_col2, config_col3 = st.columns(3)
+
+        with config_col1:
+            return_dates = st.multiselect(
+                "Return Date(s) - check if came back",
+                options=retention_dates,
+                default=[],
+                help="Select dates to check if users returned after their action"
+            )
+
+        with config_col2:
+            ret_gender = st.radio(
+                "Gender",
+                options=['both', 'male', 'female'],
+                format_func=lambda x: x.title(),
+                horizontal=True,
+                key='retention_gender'
+            )
+
+        with config_col3:
+            ret_tier = st.radio(
+                "Tier",
+                options=['all', '1', '2', '3'],
+                format_func=lambda x: 'All' if x == 'all' else f'T{x}',
+                horizontal=True,
+                key='retention_tier'
+            )
+
+        st.markdown("---")
+
+        # ============================================
+        # User List Query Tool (Main Feature)
+        # ============================================
+        st.markdown("#### Find Specific Users")
+        st.markdown("*Query users by category and return behavior*")
+
+        # Query examples
+        with st.expander("Example Queries"):
+            st.markdown("""
+            | Question | Settings |
+            |----------|----------|
+            | Users who came all days but never liked | Category=A, Return=all dates, Logic=AND |
+            | Users who got match & came back | Category=C, Return=pick dates, Logic=AND |
+            | Users who liked but no match, still came back | Category=B, Return=pick dates, Logic=OR |
+            """)
+
+        st.markdown("---")
+
+        # Query filters
+        query_col1, query_col2 = st.columns(2)
+
+        with query_col1:
+            query_category = st.selectbox(
+                "Category to Find",
+                options=['A', 'B', 'C'],
+                format_func=lambda x: {
+                    'A': 'A - Viewed only (never liked/disliked)',
+                    'B': 'B - Liked/disliked but no match',
+                    'C': 'C - Got mutual match'
+                }[x]
+            )
+
+        with query_col2:
+            query_logic = st.radio(
+                "Return Logic for Query",
+                options=['AND', 'OR'],
+                format_func=lambda x: {
+                    'AND': 'Came back on ALL return dates',
+                    'OR': 'Came back on ANY return date'
+                }[x],
+                horizontal=True
+            )
+
+        # Additional filters for each category
+        match_count_op = None
+        match_count_val = None
+        return_count_op = None
+        return_count_val = None
+        like_count_op = None
+        like_count_val = None
+        view_count_op = None
+        view_count_val = None
+
+        if query_category == 'A':
+            st.markdown("##### Additional Filters for Category A")
+            st.caption("Filter users by number of unique viewed dates (users who only viewed/passed, never liked/disliked)")
+            filter_col1, filter_col2 = st.columns(2)
+
+            with filter_col1:
+                view_count_op = st.selectbox(
+                    "Unique Viewed Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='view_count_op',
+                    help="Number of unique dates when user viewed profiles (but never liked/disliked)"
+                )
+            with filter_col2:
+                view_count_val = st.number_input(
+                    "Dates #",
+                    min_value=1,
+                    value=1,
+                    step=1,
+                    key='view_count_val'
+                )
+
+        elif query_category == 'C':
+            st.markdown("##### Additional Filters for Category C")
+            st.caption("Filter users by number of match dates and return dates")
+            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+
+            with filter_col1:
+                match_count_op = st.selectbox(
+                    "Mutual Match Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='match_count_op',
+                    help="Number of unique dates when user got mutual matches"
+                )
+            with filter_col2:
+                match_count_val = st.number_input(
+                    "Dates #",
+                    min_value=1,
+                    value=1,
+                    step=1,
+                    key='match_count_val'
+                )
+
+            with filter_col3:
+                return_count_op = st.selectbox(
+                    "Returned Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='return_count_op',
+                    help="Number of dates user came back after first match. Use >= 0 to include users who may or may not have returned."
+                )
+            with filter_col4:
+                return_count_val = st.number_input(
+                    "Dates #",
+                    min_value=0,
+                    value=1,
+                    step=1,
+                    key='return_count_val',
+                    help="0 = include users who never came back AFTER their match date"
+                )
+
+        elif query_category == 'B':
+            st.markdown("##### Additional Filters for Category B")
+            st.caption("Filter users by number of unique liked user dates and return dates")
+            filter_col1, filter_col2, filter_col3, filter_col4 = st.columns(4)
+
+            with filter_col1:
+                like_count_op = st.selectbox(
+                    "Unique Liked User Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='like_count_op',
+                    help="Number of unique dates when user liked someone (but no mutual match)"
+                )
+            with filter_col2:
+                like_count_val = st.number_input(
+                    "Dates #",
+                    min_value=1,
+                    value=1,
+                    step=1,
+                    key='like_count_val'
+                )
+
+            with filter_col3:
+                return_count_op = st.selectbox(
+                    "Returned Dates",
+                    options=['>=', '==', '<=', '>', '<'],
+                    index=0,
+                    key='return_count_op_b',
+                    help="Number of dates user came back after first like. Use >= 0 to include users who may or may not have returned."
+                )
+            with filter_col4:
+                return_count_val = st.number_input(
+                    "Dates #",
+                    min_value=0,
+                    value=1,
+                    step=1,
+                    key='return_count_val_b',
+                    help="0 = include users who never came back AFTER their first like date"
+                )
+
+        # Run query button
+        if st.button("Find Users", type="primary"):
+            with st.spinner("Searching..."):
+                # Determine return dates for query
+                query_return_dates = return_dates
+                and_logic_query = (query_logic == 'AND')
+
+                matching_users = get_users_by_retention_criteria(
+                    category=query_category,
+                    category_dates=[],  # Not needed for User List - always use highest category
+                    return_dates=query_return_dates,
+                    and_logic=and_logic_query,
+                    use_highest_category=True,  # Always use highest category
+                    matches=matches,
+                    metadata=metadata,
+                    likes_set=likes_set,
+                    gender=ret_gender,
+                    tier=ret_tier,
+                    match_count_op=match_count_op,
+                    match_count_val=match_count_val,
+                    return_count_op=return_count_op,
+                    return_count_val=return_count_val,
+                    like_count_op=like_count_op,
+                    like_count_val=like_count_val,
+                    view_count_op=view_count_op,
+                    view_count_val=view_count_val
+                )
+
+            st.markdown(f"### Found {len(matching_users)} users")
+
+            # Build explanation paragraph
+            category_desc = {
+                'A': 'only viewed/passed profiles (never liked or disliked anyone)',
+                'B': 'liked/disliked someone but did NOT get a mutual match',
+                'C': 'got a mutual match (both users liked each other)'
+            }[query_category]
+
+            # For Category C, explain that only dates AFTER match_date are considered
+            if query_category == 'C':
+                if query_logic == 'AND':
+                    return_desc = f"These users came back on ALL dates **after their first match** (from selected dates: {', '.join(return_dates) if return_dates else 'none'})."
+                else:
+                    return_desc = f"These users came back on at least ONE date **after their first match** (from selected dates: {', '.join(return_dates) if return_dates else 'none'})."
+            elif query_category == 'B':
+                if query_logic == 'AND':
+                    return_desc = f"These users came back on ALL dates **after their first like** (from selected dates: {', '.join(return_dates) if return_dates else 'none'})."
+                else:
+                    return_desc = f"These users came back on at least ONE date **after their first like** (from selected dates: {', '.join(return_dates) if return_dates else 'none'})."
+            else:
+                if query_logic == 'AND':
+                    return_desc = f"These users came back on ALL of these dates: {', '.join(return_dates) if return_dates else 'none selected'}."
+                else:
+                    return_desc = f"These users came back on at least ONE of these dates: {', '.join(return_dates) if return_dates else 'none selected'}."
+
+            filter_desc = ""
+            if ret_gender != 'both':
+                filter_desc += f" Gender: {ret_gender}."
+            if ret_tier != 'all':
+                filter_desc += f" Tier: {ret_tier}."
+
+            # Category-specific explanation
+            if query_category == 'C':
+                # Build filter description for Category C
+                filter_parts = []
+                if match_count_op and match_count_val is not None:
+                    filter_parts.append(f"mutual_match_dates {match_count_op} {match_count_val}")
+                if return_count_op and return_count_val is not None:
+                    filter_parts.append(f"returned_dates {return_count_op} {return_count_val}")
+
+                filter_str = f"\n- **Additional filters:** {', '.join(filter_parts)}" if filter_parts else ""
+
+                # Special note for return_count_val = 0
+                zero_return_note = ""
+                if return_count_val == 0:
+                    zero_return_note = "\n- **Note:** Including users who got match but never came back after that day"
+
+                explanation = f"""
+**What this means:**
+
+These are users who **{category_desc}** (based on their overall behavior).
+
+{return_desc}{filter_desc}
+
+**How it works for Category C:**
+- `match_dates`: ALL dates when user got mutual matches
+- `match_dates_count`: Number of unique dates when user got matches
+- `returned_on`: Only dates > first match_date (user came back AFTER getting match)
+- `return_dates_count`: Number of dates user came back after first match (0 = never came back after match){filter_str}{zero_return_note}
+            """
+            elif query_category == 'B':
+                # Build filter description for Category B
+                filter_parts = []
+                if like_count_op and like_count_val is not None:
+                    filter_parts.append(f"unique_liked_user_dates {like_count_op} {like_count_val}")
+                if return_count_op and return_count_val is not None:
+                    filter_parts.append(f"returned_dates {return_count_op} {return_count_val}")
+
+                filter_str = f"\n- **Additional filters:** {', '.join(filter_parts)}" if filter_parts else ""
+
+                # Special note for return_count_val = 0
+                zero_return_note = ""
+                if return_count_val == 0:
+                    zero_return_note = "\n- **Note:** Including users who liked but never came back after that day"
+
+                explanation = f"""
+**What this means:**
+
+These are users who **{category_desc}** (based on their overall behavior).
+
+{return_desc}{filter_desc}
+
+**How it works for Category B:**
+- `like_dates`: ALL dates when user liked someone (but no mutual match)
+- `like_dates_count`: Number of unique dates when user liked other users
+- `returned_on`: Only dates > first like_date (user came back AFTER liking)
+- `return_dates_count`: Number of dates user came back after first like (0 = never came back after like){filter_str}{zero_return_note}
+            """
+            else:
+                # Category A
+                filter_parts = []
+                if view_count_op and view_count_val is not None:
+                    filter_parts.append(f"unique_viewed_dates {view_count_op} {view_count_val}")
+
+                filter_str = f"\n- **Additional filters:** {', '.join(filter_parts)}" if filter_parts else ""
+
+                explanation = f"""
+**What this means:**
+
+These are users who **{category_desc}** (based on their overall behavior).
+
+{filter_desc}
+
+**How it works for Category A:**
+- `view_dates`: ALL unique dates when user viewed profiles (but never liked/disliked)
+- `view_dates_count`: Number of unique dates when user viewed profiles{filter_str}
+            """
+
+            st.info(explanation)
+
+            if matching_users:
+                df_users = pd.DataFrame(matching_users)
+                st.dataframe(df_users, hide_index=True)
+
+                # For Category C: Show heatmap matrix of match_dates_count × return_dates_count
+                if query_category == 'C' and len(df_users) > 0:
+                    st.markdown("---")
+                    st.markdown("#### Distribution Matrix: Match Dates × Return Dates")
+
+                    # Get unique values for matrix
+                    match_counts = sorted(df_users['match_dates_count'].unique())
+                    return_counts = sorted(df_users['return_dates_count'].unique())
+
+                    # Build matrix for heatmap (2D array)
+                    z_values = []
+                    for mc in match_counts:
+                        row = []
+                        for rc in return_counts:
+                            count = len(df_users[(df_users['match_dates_count'] == mc) & (df_users['return_dates_count'] == rc)])
+                            row.append(count)
+                        z_values.append(row)
+
+                    # Create heatmap with Plotly
+                    fig_heatmap = go.Figure(data=go.Heatmap(
+                        z=z_values,
+                        x=[str(rc) for rc in return_counts],
+                        y=[f"Match {mc}" for mc in match_counts],
+                        text=z_values,
+                        texttemplate="%{text}",
+                        textfont={"size": 14},
+                        colorscale='RdYlGn_r',  # Red-Yellow-Green reversed (green=high, red=low)
+                        showscale=True,
+                        hoverongaps=False,
+                        hovertemplate='Match Dates: %{y}<br>Return Dates: %{x}<br>Users: %{z}<extra></extra>'
+                    ))
+
+                    fig_heatmap.update_layout(
+                        title=None,
+                        xaxis_title="Return Dates Count",
+                        yaxis_title="Match Dates Count",
+                        height=max(300, len(match_counts) * 60 + 100),
+                        yaxis=dict(autorange='reversed'),  # Put Match 1 at top
+                        margin=dict(l=100, r=50, t=30, b=80)
+                    )
+
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+
+                    # Also show raw data table below
+                    with st.expander("View Raw Matrix Data"):
+                        matrix_data = []
+                        for mc in match_counts:
+                            row = {'Match Dates': mc}
+                            for rc in return_counts:
+                                count = len(df_users[(df_users['match_dates_count'] == mc) & (df_users['return_dates_count'] == rc)])
+                                row[f'Return {rc}'] = count
+                            row['Total'] = len(df_users[df_users['match_dates_count'] == mc])
+                            matrix_data.append(row)
+
+                        # Add totals row
+                        totals_row = {'Match Dates': 'Total'}
+                        for rc in return_counts:
+                            totals_row[f'Return {rc}'] = len(df_users[df_users['return_dates_count'] == rc])
+                        totals_row['Total'] = len(df_users)
+                        matrix_data.append(totals_row)
+
+                        st.dataframe(pd.DataFrame(matrix_data), hide_index=True, use_container_width=True)
+
+                # For Category B: Show heatmap matrix of like_dates_count × return_dates_count
+                elif query_category == 'B' and len(df_users) > 0:
+                    st.markdown("---")
+                    st.markdown("#### Distribution Matrix: Unique Liked Users Dates × Return Dates")
+
+                    # Get unique values for matrix
+                    like_counts = sorted(df_users['like_dates_count'].unique())
+                    return_counts = sorted(df_users['return_dates_count'].unique())
+
+                    # Build matrix for heatmap (2D array)
+                    z_values = []
+                    for lc in like_counts:
+                        row = []
+                        for rc in return_counts:
+                            count = len(df_users[(df_users['like_dates_count'] == lc) & (df_users['return_dates_count'] == rc)])
+                            row.append(count)
+                        z_values.append(row)
+
+                    # Create heatmap with Plotly
+                    fig_heatmap = go.Figure(data=go.Heatmap(
+                        z=z_values,
+                        x=[str(rc) for rc in return_counts],
+                        y=[f"Liked {lc}" for lc in like_counts],
+                        text=z_values,
+                        texttemplate="%{text}",
+                        textfont={"size": 14},
+                        colorscale='RdYlGn_r',  # Red-Yellow-Green reversed (green=high, red=low)
+                        showscale=True,
+                        hoverongaps=False,
+                        hovertemplate='Unique Liked User Dates: %{y}<br>Return Dates: %{x}<br>Users: %{z}<extra></extra>'
+                    ))
+
+                    fig_heatmap.update_layout(
+                        title=None,
+                        xaxis_title="Return Dates Count",
+                        yaxis_title="Unique Liked User Dates Count",
+                        height=max(300, len(like_counts) * 60 + 100),
+                        yaxis=dict(autorange='reversed'),  # Put Liked 1 at top
+                        margin=dict(l=150, r=50, t=30, b=80)
+                    )
+
+                    st.plotly_chart(fig_heatmap, use_container_width=True)
+
+                    # Also show raw data table below
+                    with st.expander("View Raw Matrix Data"):
+                        matrix_data = []
+                        for lc in like_counts:
+                            row = {'Unique Liked User Dates': lc}
+                            for rc in return_counts:
+                                count = len(df_users[(df_users['like_dates_count'] == lc) & (df_users['return_dates_count'] == rc)])
+                                row[f'Return {rc}'] = count
+                            row['Total'] = len(df_users[df_users['like_dates_count'] == lc])
+                            matrix_data.append(row)
+
+                        # Add totals row
+                        totals_row = {'Unique Liked User Dates': 'Total'}
+                        for rc in return_counts:
+                            totals_row[f'Return {rc}'] = len(df_users[df_users['return_dates_count'] == rc])
+                        totals_row['Total'] = len(df_users)
+                        matrix_data.append(totals_row)
+
+                        st.dataframe(pd.DataFrame(matrix_data), hide_index=True, use_container_width=True)
+
+                # For Category A: Show distribution of view_dates_count
+                elif query_category == 'A' and len(df_users) > 0:
+                    st.markdown("---")
+                    st.markdown("#### Distribution: Unique Viewed Dates Count")
+
+                    # Get unique values for distribution
+                    view_counts = sorted(df_users['view_dates_count'].unique())
+
+                    # Build data for bar chart
+                    bar_data = []
+                    for vc in view_counts:
+                        count = len(df_users[df_users['view_dates_count'] == vc])
+                        bar_data.append({'View Dates': vc, 'Users': count})
+
+                    # Create bar chart with Plotly
+                    fig_bar = go.Figure(data=go.Bar(
+                        x=[str(d['View Dates']) for d in bar_data],
+                        y=[d['Users'] for d in bar_data],
+                        text=[d['Users'] for d in bar_data],
+                        textposition='outside',
+                        marker_color='#636EFA'
+                    ))
+
+                    fig_bar.update_layout(
+                        title=None,
+                        xaxis_title="Unique Viewed Dates Count",
+                        yaxis_title="Number of Users",
+                        height=400,
+                        margin=dict(l=50, r=50, t=30, b=80)
+                    )
+
+                    st.plotly_chart(fig_bar, use_container_width=True)
+
+                    # Also show raw data table below
+                    with st.expander("View Raw Distribution Data"):
+                        dist_data = []
+                        for vc in view_counts:
+                            count = len(df_users[df_users['view_dates_count'] == vc])
+                            dist_data.append({'Viewed Dates': str(vc), 'Users': count})
+                        dist_data.append({'Viewed Dates': 'Total', 'Users': len(df_users)})
+                        st.dataframe(pd.DataFrame(dist_data), hide_index=True, use_container_width=True)
+
+                # Export options
+                st.markdown("---")
+                st.markdown("#### Export")
+
+                export_col1, export_col2 = st.columns(2)
+
+                with export_col1:
+                    csv = df_users.to_csv(index=False)
+                    st.download_button(
+                        "Download CSV",
+                        data=csv,
+                        file_name=f"retention_users_{query_category}.csv",
+                        mime="text/csv",
+                        use_container_width=True
+                    )
+
+                with export_col2:
+                    user_ids = '\n'.join(df_users['user_id'].tolist())
+                    st.download_button(
+                        "Download User IDs",
+                        data=user_ids,
+                        file_name=f"user_ids_{query_category}.txt",
+                        mime="text/plain",
+                        use_container_width=True
+                    )
+            else:
+                st.info("No users found matching the criteria.")
