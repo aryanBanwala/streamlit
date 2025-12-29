@@ -542,6 +542,28 @@ with tab1:
     if not filtered_matches:
         st.warning("No data available for selected filters.")
     else:
+        # Dropdown for relative percentage base
+        relative_base_options = {
+            'users_with_metadata': 'Users with Metadata',
+            'users_with_matches': 'Users with Matches',
+            'users_viewed': 'Users who Viewed',
+            'users_engaged': 'Users who Engaged (KM > 0)',
+            'users_decided': 'Users who Decided',
+            'users_liked': 'Users who Liked at least 1',
+        }
+
+        # Initialize session state for relative base
+        if 'funnel_relative_base' not in st.session_state:
+            st.session_state.funnel_relative_base = 'users_with_matches'
+
+        selected_base = st.selectbox(
+            "Calculate Relative % based on:",
+            options=list(relative_base_options.keys()),
+            format_func=lambda x: relative_base_options[x],
+            index=list(relative_base_options.keys()).index(st.session_state.funnel_relative_base),
+            key='funnel_relative_base_select'
+        )
+        st.session_state.funnel_relative_base = selected_base
         # Calculate funnel metrics
         # Group matches by user
         user_matches_map = {}
@@ -634,41 +656,52 @@ with tab1:
 
         total_users_metadata = len(filtered_metadata)
 
+        # Map selected base to actual count value
+        base_counts = {
+            'users_with_metadata': total_users_metadata,
+            'users_with_matches': users_with_matches,
+            'users_viewed': len(users_viewed),
+            'users_engaged': len(users_engaged),
+            'users_decided': len(users_decided),
+            'users_liked': len(users_liked),
+        }
+        relative_base_count = base_counts.get(selected_base, users_with_matches)
+
         # Build funnel data with tooltips (Absolute % based on metadata count)
         funnel_data = [
             {
                 'Stage': 'Users with Metadata',
                 'Count': total_users_metadata,
                 'Absolute %': 100.0,
-                'Relative %': '-',
+                'Relative %': calc_pct(total_users_metadata, relative_base_count) if selected_base != 'users_with_metadata' else '-',
                 'tooltip': 'Users with profile in user_metadata table (filtered by gender)'
             },
             {
                 'Stage': 'Users with Matches',
                 'Count': users_with_matches,
                 'Absolute %': calc_pct(users_with_matches, total_users_metadata),
-                'Relative %': calc_pct(users_with_matches, total_users_metadata),
+                'Relative %': calc_pct(users_with_matches, relative_base_count) if selected_base != 'users_with_matches' else '-',
                 'tooltip': 'Users who received at least 1 match in selected date range'
             },
             {
                 'Stage': 'Users who Viewed',
                 'Count': len(users_viewed),
                 'Absolute %': calc_pct(len(users_viewed), total_users_metadata),
-                'Relative %': calc_pct(len(users_viewed), users_with_matches),
+                'Relative %': calc_pct(len(users_viewed), relative_base_count) if selected_base != 'users_viewed' else '-',
                 'tooltip': 'Users who opened and viewed at least 1 match (is_viewed = true)'
             },
             {
                 'Stage': 'Users who Engaged (KM > 0)',
                 'Count': len(users_engaged),
                 'Absolute %': calc_pct(len(users_engaged), total_users_metadata),
-                'Relative %': calc_pct(len(users_engaged), len(users_viewed)) if len(users_viewed) > 0 else 0,
+                'Relative %': calc_pct(len(users_engaged), relative_base_count) if selected_base != 'users_engaged' else '-',
                 'tooltip': 'Users who clicked "Know More" at least once on any match (know_more_count > 0)'
             },
             {
                 'Stage': 'Users who Decided',
                 'Count': len(users_decided),
                 'Absolute %': calc_pct(len(users_decided), total_users_metadata),
-                'Relative %': calc_pct(len(users_decided), len(users_engaged)) if len(users_engaged) > 0 else 0,
+                'Relative %': calc_pct(len(users_decided), relative_base_count) if selected_base != 'users_decided' else '-',
                 'tooltip': 'Users who took any action - liked, disliked, or passed on at least 1 match (is_liked is not null)'
             },
         ]
@@ -679,28 +712,28 @@ with tab1:
                 'Stage': '  - Liked at least 1',
                 'Count': len(users_liked),
                 'Absolute %': calc_pct(len(users_liked), total_users_metadata),
-                'Relative %': calc_pct(len(users_liked), len(users_decided)) if len(users_decided) > 0 else 0,
+                'Relative %': calc_pct(len(users_liked), relative_base_count) if selected_base != 'users_liked' else '-',
                 'tooltip': 'Users who liked at least 1 match (is_liked = "liked")'
             },
             {
                 'Stage': '  - Disliked at least 1',
                 'Count': len(users_disliked),
                 'Absolute %': calc_pct(len(users_disliked), total_users_metadata),
-                'Relative %': calc_pct(len(users_disliked), len(users_decided)) if len(users_decided) > 0 else 0,
+                'Relative %': calc_pct(len(users_disliked), relative_base_count),
                 'tooltip': 'Users who disliked at least 1 match (is_liked = "disliked")'
             },
             {
                 'Stage': '  - Passed at least 1',
                 'Count': len(users_passed),
                 'Absolute %': calc_pct(len(users_passed), total_users_metadata),
-                'Relative %': calc_pct(len(users_passed), len(users_decided)) if len(users_decided) > 0 else 0,
+                'Relative %': calc_pct(len(users_passed), relative_base_count),
                 'tooltip': 'Users who passed on at least 1 match (is_liked = "passed")'
             },
             {
                 'Stage': '  - Got Match (mutual like)',
                 'Count': len(users_got_match),
                 'Absolute %': calc_pct(len(users_got_match), total_users_metadata),
-                'Relative %': calc_pct(len(users_got_match), len(users_liked)) if len(users_liked) > 0 else 0,
+                'Relative %': calc_pct(len(users_got_match), relative_base_count),
                 'tooltip': 'Users who liked someone AND that person also liked them back (a->b liked AND b->a liked). Checks reverse like from full table, not just selected dates.'
             },
         ]
@@ -710,7 +743,7 @@ with tab1:
                 'Stage': 'Users No Action Yet',
                 'Count': users_no_action,
                 'Absolute %': calc_pct(users_no_action, total_users_metadata),
-                'Relative %': '-',
+                'Relative %': calc_pct(users_no_action, relative_base_count),
                 'tooltip': 'Users who got matches but never opened/viewed any of them'
             },
         ]
