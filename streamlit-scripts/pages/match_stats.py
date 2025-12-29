@@ -1804,6 +1804,62 @@ with tab_per_user:
                     genders_pu = fetch_user_genders(all_user_ids_tuple_pu)
                     emails_pu, phones_pu = fetch_user_contact_batch(all_user_ids_tuple_pu)
 
+                # --- CSV Download Button for Unique Match Pairs ---
+                # Build unique pairs CSV data (independent of gender filter)
+                csv_rows = []
+                for m in display_matches_pu:
+                    u1, u2 = m['user_1'], m['user_2']
+                    g1 = genders_pu.get(u1, 'unknown')
+                    g2 = genders_pu.get(u2, 'unknown')
+
+                    # Determine female and male
+                    if g1 == 'female' and g2 == 'male':
+                        female_id, male_id = u1, u2
+                    elif g1 == 'male' and g2 == 'female':
+                        female_id, male_id = u2, u1
+                    else:
+                        # Same gender or unknown - skip or use u1 as female, u2 as male
+                        female_id, male_id = u1, u2
+
+                    female_profile = profiles_pu.get(female_id, {})
+                    male_profile = profiles_pu.get(male_id, {})
+
+                    csv_rows.append({
+                        'female_user_id': female_id,
+                        'male_user_id': male_id,
+                        'female_name': female_profile.get('name', 'Unknown'),
+                        'male_name': male_profile.get('name', 'Unknown'),
+                        'female_email': emails_pu.get(female_id, 'N/A'),
+                        'male_email': emails_pu.get(male_id, 'N/A'),
+                        'female_phone': phones_pu.get(female_id) or female_profile.get('phone_num') or 'N/A',
+                        'male_phone': phones_pu.get(male_id) or male_profile.get('phone_num') or 'N/A',
+                        'female_age': female_profile.get('age', 'N/A'),
+                        'male_age': male_profile.get('age', 'N/A'),
+                        'match_type': m['match_type'],
+                        'match_date': str(m['match_date'])
+                    })
+
+                if csv_rows:
+                    df_csv_export = pd.DataFrame(csv_rows)
+                    csv_data = df_csv_export.to_csv(index=False)
+
+                    col_download, col_help = st.columns([1, 0.1])
+                    with col_download:
+                        st.download_button(
+                            label="Download Match Pairs CSV",
+                            data=csv_data,
+                            file_name=f"match_pairs_{selected_date_pu}.csv",
+                            mime="text/csv",
+                            key="download_match_pairs_csv"
+                        )
+                    with col_help:
+                        st.markdown(
+                            '<span title="Downloads unique match pairs with female and male user details. Each row represents one match (no duplicates). Includes: Female/Male User ID, Name, Email, Phone, Age, Match Type, and Match Date. This export is independent of the gender filter selection below.">❓</span>',
+                            unsafe_allow_html=True
+                        )
+
+                st.divider()
+
                 # Build user -> matches mapping
                 user_matches_map = {}
                 for m in display_matches_pu:
