@@ -202,14 +202,6 @@ def render_user_card_streamlit(user_id, metadata, ranking_data=None, persona=Non
     if linkedin:
         st.markdown(f"**LinkedIn:** [{linkedin[:40]}...]({linkedin})")
 
-    # Show ranking scores if available
-    if ranking_data:
-        st.markdown("---")
-        st.markdown("**Ranking Scores:**")
-        score = ranking_data.get('score', 'N/A')
-        rank = ranking_data.get('rank', 'N/A')
-        st.markdown(f"Score: `{score:.4f}` | Rank: `{rank}`" if isinstance(score, float) else f"Score: `{score}` | Rank: `{rank}`")
-
     # Photos
     if photos:
         st.markdown("**Photos:**")
