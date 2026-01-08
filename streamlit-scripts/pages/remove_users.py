@@ -106,7 +106,7 @@ def fetch_users_to_review():
                 'user_id, name, city, area, work_exp, education, interesting_facts, religion, '
                 'profile_images, collage_images, instagram_images, "shouldBeRemoved", "hasAppropriatePhotos", created_at, '
                 'gender, professional_tier, attractiveness, age'
-            )
+            ).order('user_id')
 
             # Add pagination
             res = query.range(offset, offset + page_size - 1).execute()
