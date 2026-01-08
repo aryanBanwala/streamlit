@@ -421,6 +421,9 @@ else:
 
         # Create expandable card for each user
         with st.expander(title, expanded=False):
+            # User ID with copy button
+            st.code(user_id, language=None)
+
             # Action buttons at top
             col_action1, col_action2, col_spacer = st.columns([1, 1, 2])
             with col_action1:
