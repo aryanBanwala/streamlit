@@ -71,6 +71,18 @@ st.markdown("""
     border-radius: 8px;
     margin-bottom: 20px;
 }
+
+.persona-box {
+    background: rgba(100, 100, 100, 0.15);
+    border-radius: 8px;
+    padding: 12px;
+    margin: 10px 0;
+    max-height: 200px;
+    overflow-y: auto;
+    font-size: 14px;
+    line-height: 1.5;
+    border-left: 3px solid #9c27b0;
+}
 </style>
 """, unsafe_allow_html=True)
 
@@ -119,6 +131,39 @@ def fetch_users_to_review():
     except Exception as e:
         st.error(f"Error fetching users: {e}")
         return []
+
+def fetch_user_persona(user_id: str):
+    """Fetch user persona paragraph from user_personas table."""
+    try:
+        result = supabase.table('user_personas').select(
+            'user_persona_para'
+        ).eq('user_id', user_id).execute()
+
+        if result.data and len(result.data) > 0:
+            return result.data[0].get('user_persona_para', '')
+        return ''
+    except Exception:
+        return ''
+
+
+def format_persona_paragraphs(persona: str) -> str:
+    """Split persona into 4 equal paragraphs for better readability."""
+    if not persona:
+        return ''
+    sentences = [s.strip() for s in persona.replace('!', '.').replace('?', '.').split('.') if s.strip()]
+    if len(sentences) >= 4:
+        chunk_size = len(sentences) // 4
+        remainder = len(sentences) % 4
+        paragraphs = []
+        start = 0
+        for i in range(4):
+            end = start + chunk_size + (1 if i < remainder else 0)
+            para_sentences = sentences[start:end]
+            paragraphs.append('. '.join(para_sentences) + '.')
+            start = end
+        return '</p><p style="margin: 8px 0;">'.join(paragraphs)
+    return persona
+
 
 def update_should_be_removed(user_id: str, value):
     """Update shouldBeRemoved field for a user."""
@@ -454,6 +499,14 @@ else:
                     st.markdown(f"- {fact}")
             else:
                 st.markdown("No interesting facts available")
+
+            # User Persona (About section)
+            persona = fetch_user_persona(user_id)
+            if persona:
+                st.divider()
+                st.markdown("**About**")
+                formatted_persona = format_persona_paragraphs(persona)
+                st.markdown(f'<div class="persona-box"><p style="margin: 8px 0;">{formatted_persona}</p></div>', unsafe_allow_html=True)
 
 # --- Pagination Controls at Bottom (only show if not searching) ---
 if not searched_user:
