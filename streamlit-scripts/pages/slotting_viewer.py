@@ -88,6 +88,19 @@ def fetch_user_images_batch(_user_ids_tuple):
         st.warning(f"Failed to fetch images: {e}")
         return {}
 
+def fetch_user_images_for_user_and_matches(user_id, match_ids):
+    """Fetch images for a specific user and their matches (bypasses cache for reload)."""
+    all_ids = [user_id] + list(match_ids)
+    if not all_ids:
+        return {}
+    try:
+        supabase = get_supabase_client()
+        result = supabase.table('user_metadata').select('user_id, profile_images').in_('user_id', all_ids).execute()
+        return {row['user_id']: row.get('profile_images') or [] for row in result.data}
+    except Exception as e:
+        st.warning(f"Failed to fetch images for user {user_id}: {e}")
+        return {}
+
 @st.cache_data(ttl=300)
 def fetch_user_metadata_batch(_user_ids_tuple):
     """Fetch profile_images and professional_tier for multiple users from Supabase."""
@@ -449,22 +462,50 @@ def get_all_user_ids_for_page(user_ids_to_show):
     return list(all_ids)
 
 # --- Display logic based on search ---
-def display_user_matches(user_id, user_data, images_map=None):
+def display_user_matches(user_id, user_data, images_map=None, show_reload_btn=True):
     """Display a single user's matches."""
     gender = user_data.get('gender', '?')
     gender_class = 'gender-male' if gender == 'male' else 'gender-female' if gender == 'female' else ''
     gender_icon = 'M' if gender == 'male' else 'F' if gender == 'female' else '?'
 
-    st.markdown(f"### User: `{user_id}` <span class='{gender_class}'>({gender_icon})</span>", unsafe_allow_html=True)
+    # Header row with user ID and reload button
+    header_col1, header_col2 = st.columns([6, 1])
+    with header_col1:
+        st.markdown(f"### User: `{user_id}` <span class='{gender_class}'>({gender_icon})</span>", unsafe_allow_html=True)
+
+    # Get match IDs for this user (needed for reload)
+    matches = user_data.get('matches', [])
+    match_ids = [m.get('recommended_user_id') for m in matches[:9] if m.get('recommended_user_id')]
+
+    # Handle reload button - fetches fresh images for THIS user and their matches only
+    reload_key = f"reload_images_{user_id}"
+    fresh_images_key = f"fresh_images_{user_id}"
+
+    with header_col2:
+        if show_reload_btn:
+            if st.button("🔄", key=reload_key, help="Reload images for this user and their matches"):
+                with st.spinner("Reloading..."):
+                    fresh_images = fetch_user_images_for_user_and_matches(user_id, match_ids)
+                st.session_state[fresh_images_key] = fresh_images
+
+    # Build effective images map for THIS user:
+    # - Start with original images_map (batch-loaded for page)
+    # - Override with fresh images if user clicked reload
+    effective_images = {}
+    if images_map:
+        # Copy relevant entries from batch-loaded images
+        effective_images = dict(images_map)
+    # Override with fresh images if available (reload was clicked for this user)
+    if fresh_images_key in st.session_state:
+        effective_images.update(st.session_state[fresh_images_key])
 
     # Show user's own images using HTML img tags (more reliable than st.image)
-    if images_map:
-        user_imgs = images_map.get(user_id, [])[:5]
+    if effective_images:
+        user_imgs = effective_images.get(user_id, [])[:5]
         if user_imgs:
             img_html = "".join([f'<img src="{url}" width="100" style="margin-right:8px;border-radius:6px;" loading="lazy">' for url in user_imgs])
             st.markdown(f'<div style="margin-bottom:12px;">{img_html} <small>User</small></div>', unsafe_allow_html=True)
 
-    matches = user_data.get('matches', [])
     num_matches = len(matches)
     cols = st.columns(min(num_matches, 9))
 
@@ -475,8 +516,8 @@ def display_user_matches(user_id, user_data, images_map=None):
                 st.markdown(card_html, unsafe_allow_html=True)
                 st.code(rec_id, language=None)
                 # Show recommended user's images using HTML img tags
-                if images_map:
-                    rec_imgs = images_map.get(rec_id, [])[:5]  # Show 5 images per match
+                if effective_images:
+                    rec_imgs = effective_images.get(rec_id, [])[:5]  # Show 5 images per match
                     if rec_imgs:
                         imgs_html = "".join([f'<img src="{url}" width="80" style="margin-right:4px;margin-bottom:4px;border-radius:4px;" loading="lazy">' for url in rec_imgs])
                         st.markdown(f'<div style="display:flex;flex-wrap:wrap;">{imgs_html}</div>', unsafe_allow_html=True)
