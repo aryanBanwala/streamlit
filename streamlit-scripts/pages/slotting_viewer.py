@@ -459,10 +459,10 @@ def display_user_matches(user_id, user_data, images_map=None):
 
     # Show user's own images using HTML img tags (more reliable than st.image)
     if images_map:
-        user_imgs = images_map.get(user_id, [])[:2]
+        user_imgs = images_map.get(user_id, [])[:5]
         if user_imgs:
-            img_html = "".join([f'<img src="{url}" width="60" style="margin-right:5px;border-radius:4px;" loading="lazy">' for url in user_imgs])
-            st.markdown(f'<div style="margin-bottom:10px;">{img_html} <small>User</small></div>', unsafe_allow_html=True)
+            img_html = "".join([f'<img src="{url}" width="100" style="margin-right:8px;border-radius:6px;" loading="lazy">' for url in user_imgs])
+            st.markdown(f'<div style="margin-bottom:12px;">{img_html} <small>User</small></div>', unsafe_allow_html=True)
 
     matches = user_data.get('matches', [])
     num_matches = len(matches)
@@ -476,9 +476,10 @@ def display_user_matches(user_id, user_data, images_map=None):
                 st.code(rec_id, language=None)
                 # Show recommended user's images using HTML img tags
                 if images_map:
-                    rec_imgs = images_map.get(rec_id, [])[:1]  # Only show 1 image per match
+                    rec_imgs = images_map.get(rec_id, [])[:5]  # Show 5 images per match
                     if rec_imgs:
-                        st.markdown(f'<img src="{rec_imgs[0]}" width="60" style="border-radius:4px;" loading="lazy">', unsafe_allow_html=True)
+                        imgs_html = "".join([f'<img src="{url}" width="80" style="margin-right:4px;margin-bottom:4px;border-radius:4px;" loading="lazy">' for url in rec_imgs])
+                        st.markdown(f'<div style="display:flex;flex-wrap:wrap;">{imgs_html}</div>', unsafe_allow_html=True)
     st.divider()
 
 # --- Show Unique Males View ---
