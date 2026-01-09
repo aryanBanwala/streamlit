@@ -4,6 +4,7 @@ Remove Unnecessary Users - Review users and mark them for removal
 import streamlit as st
 import os
 import sys
+from datetime import date
 from dotenv import load_dotenv
 
 # Setup paths (pages folder ke andar se 2 levels up)
@@ -237,12 +238,22 @@ st.sidebar.divider()
 # --- Filters ---
 st.sidebar.header("Filters")
 
-# Date filter
-filter_date = st.sidebar.date_input(
+# Date filters
+filter_date_after = st.sidebar.date_input(
     "Created on or after",
     value=None,
-    key="filter_date"
+    key="filter_date_after"
 )
+
+filter_date_before = st.sidebar.date_input(
+    "Created on or before",
+    value=date(2026, 12, 31),
+    key="filter_date_before"
+)
+
+# Validate date range
+if filter_date_after and filter_date_before and filter_date_after > filter_date_before:
+    st.sidebar.error("'After' date cannot be greater than 'Before' date")
 
 # Gender filter
 gender_options = ["All", "male", "female"]
@@ -302,9 +313,14 @@ search_btn = st.sidebar.button("Search", key="search_btn")
 # --- Apply Filters ---
 filtered_users = all_users.copy()
 
-# Apply date filter
-if filter_date:
-    filtered_users = [u for u in filtered_users if u.get('created_at') and u.get('created_at')[:10] >= filter_date.isoformat()]
+# Apply date filters (only if valid range)
+date_range_valid = not (filter_date_after and filter_date_before and filter_date_after > filter_date_before)
+
+if date_range_valid:
+    if filter_date_after:
+        filtered_users = [u for u in filtered_users if u.get('created_at') and u.get('created_at')[:10] >= filter_date_after.isoformat()]
+    if filter_date_before:
+        filtered_users = [u for u in filtered_users if u.get('created_at') and u.get('created_at')[:10] <= filter_date_before.isoformat()]
 
 # Apply gender filter
 if gender_filter != "All":
