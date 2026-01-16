@@ -458,19 +458,29 @@ if generate_clicked:
         with st.spinner("Fetching user data from Supabase..."):
             user_ids = st.session_state.ebg_parsed_ids
 
-            # Fetch emails from user_data
-            user_data_res = supabase.table("user_data").select("user_id, user_email").in_("user_id", user_ids).execute()
+            # Batch queries to avoid PostgREST URL length limits
+            BATCH_SIZE = 100
+            user_data_all = []
+            user_metadata_all = []
 
-            # Fetch gender from user_metadata
-            user_metadata_res = supabase.table("user_metadata").select("user_id, gender").in_("user_id", user_ids).execute()
+            for i in range(0, len(user_ids), BATCH_SIZE):
+                batch = user_ids[i:i + BATCH_SIZE]
 
-            if not user_data_res.data:
+                # Fetch emails from user_data
+                user_data_res = supabase.table("user_data").select("user_id, user_email").in_("user_id", batch).execute()
+                user_data_all.extend(user_data_res.data or [])
+
+                # Fetch gender from user_metadata
+                user_metadata_res = supabase.table("user_metadata").select("user_id, gender").in_("user_id", batch).execute()
+                user_metadata_all.extend(user_metadata_res.data or [])
+
+            if not user_data_all:
                 st.error("No users found in database!")
             else:
                 # Merge data
                 users = []
-                for ud in user_data_res.data:
-                    metadata = next((um for um in user_metadata_res.data if um['user_id'] == ud['user_id']), None)
+                for ud in user_data_all:
+                    metadata = next((um for um in user_metadata_all if um['user_id'] == ud['user_id']), None)
                     users.append({
                         "user_id": ud['user_id'],
                         "user_email": ud.get('user_email'),
