@@ -720,13 +720,26 @@ with tab1:
 
         all_data = funnel_data + sub_data + no_action_data
 
-        # Create DataFrame for display
+        # Build count lookup for relative % calculation
+        stage_counts = {row['Stage'].strip(): row['Count'] for row in all_data}
+        stage_options = [row['Stage'].strip() for row in all_data]
+
+        # Selectbox to choose relative base
+        relative_base = st.selectbox(
+            "📊 Calculate Relative % with respect to:",
+            options=stage_options,
+            index=stage_options.index('Users with Matches') if 'Users with Matches' in stage_options else 0,
+            key='funnel_relative_base'
+        )
+        base_count = stage_counts.get(relative_base, 1)
+
+        # Create DataFrame for display with dynamic relative %
         df_funnel = pd.DataFrame([
             {
                 'Stage': row['Stage'],
                 'Count': row['Count'],
                 'Absolute %': f"{row['Absolute %']:.1f}%" if isinstance(row['Absolute %'], (int, float)) else row['Absolute %'],
-                'Relative %': f"{row['Relative %']:.1f}%" if isinstance(row['Relative %'], (int, float)) else row['Relative %'],
+                '↓ Relative %': f"{(row['Count'] / base_count * 100):.1f}%" if base_count > 0 else '-',
             }
             for row in all_data
         ])
