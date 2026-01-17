@@ -599,6 +599,7 @@ with tab1:
                 users_passed.add(uid)
 
         users_no_action = users_with_matches - len(users_viewed)
+        users_viewed_no_action = users_viewed - users_decided  # Viewed but didn't decide
 
         # Calculate "Users who Got Match" (mutual likes)
         # Step 1: Build a set of all (b, a) pairs where b liked a from FULL matches table
@@ -713,6 +714,13 @@ with tab1:
                 'Relative %': '-',
                 'tooltip': 'Users who got matches but never opened/viewed any of them'
             },
+            {
+                'Stage': 'Users Viewed but No Action',
+                'Count': len(users_viewed_no_action),
+                'Absolute %': calc_pct(len(users_viewed_no_action), total_users_metadata),
+                'Relative %': calc_pct(len(users_viewed_no_action), len(users_viewed)) if len(users_viewed) > 0 else 0,
+                'tooltip': 'Users who viewed matches but never decided (liked/disliked/passed) on any'
+            },
         ]
 
         # Display table
@@ -744,15 +752,28 @@ with tab1:
             for row in all_data
         ])
 
-        # Highlight key metrics with color
-        def highlight_key_rows(row):
-            if row['Stage'] == 'Users with Matches':
-                return ['background-color: rgba(102, 126, 234, 0.3)'] * len(row)
-            elif row['Stage'] == '  - Got Match (mutual like)':
-                return ['background-color: rgba(33, 195, 84, 0.3)'] * len(row)
+        # Highlight each row with distinct colors for easy visual mapping
+        def highlight_rows(row):
+            stage = row['Stage'].strip()
+            color_map = {
+                'Users with Metadata': 'rgba(156, 163, 175, 0.25)',      # Gray
+                'Users with Matches': 'rgba(102, 126, 234, 0.35)',       # Blue
+                'Users who Viewed': 'rgba(139, 92, 246, 0.3)',           # Purple
+                'Users who Engaged (KM > 0)': 'rgba(236, 72, 153, 0.3)', # Pink
+                'Users who Decided': 'rgba(251, 146, 60, 0.3)',          # Orange
+                'Liked at least 1': 'rgba(34, 197, 94, 0.3)',            # Green
+                'Disliked at least 1': 'rgba(239, 68, 68, 0.3)',         # Red
+                'Passed at least 1': 'rgba(234, 179, 8, 0.3)',           # Yellow
+                'Got Match (mutual like)': 'rgba(16, 185, 129, 0.4)',    # Emerald
+                'Users No Action Yet': 'rgba(107, 114, 128, 0.3)',       # Dark gray
+                'Users Viewed but No Action': 'rgba(249, 115, 22, 0.3)', # Deep orange
+            }
+            bg_color = color_map.get(stage, '')
+            if bg_color:
+                return [f'background-color: {bg_color}'] * len(row)
             return [''] * len(row)
 
-        styled_df = df_funnel.style.apply(highlight_key_rows, axis=1)
+        styled_df = df_funnel.style.apply(highlight_rows, axis=1)
         st.dataframe(styled_df, use_container_width=True, hide_index=True)
 
         # Show tooltips/explanations in an expander
