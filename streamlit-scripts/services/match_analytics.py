@@ -80,7 +80,7 @@ def fetch_user_matches(progress_callback: Optional[Callable] = None) -> list:
         response = supabase.table('user_matches').select(
             'match_id, current_user_id, matched_user_id, rank, is_viewed, viewed_at, '
             'is_liked, liked_at, know_more_count, origin_phase, created_at'
-        ).range(offset, offset + BATCH_SIZE - 1).execute()
+        ).order('match_id', desc=False).range(offset, offset + BATCH_SIZE - 1).execute()
 
         if not response.data:
             break
@@ -127,7 +127,7 @@ def fetch_user_metadata(progress_callback: Optional[Callable] = None) -> list:
 
         response = supabase.table('user_metadata').select(
             'user_id, gender, professional_tier'
-        ).range(offset, offset + BATCH_SIZE - 1).execute()
+        ).order('id', desc=False).range(offset, offset + BATCH_SIZE - 1).execute()
 
         if not response.data:
             break
