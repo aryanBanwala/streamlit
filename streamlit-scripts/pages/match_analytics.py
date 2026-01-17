@@ -708,14 +708,14 @@ with tab1:
 
         no_action_data = [
             {
-                'Stage': 'Users No Action Yet',
+                'Stage': 'Users Never Viewed',
                 'Count': users_no_action,
                 'Absolute %': calc_pct(users_no_action, total_users_metadata),
                 'Relative %': '-',
                 'tooltip': 'Users who got matches but never opened/viewed any of them'
             },
             {
-                'Stage': 'Users Viewed but No Action',
+                'Stage': 'Users Viewed but Never Decided',
                 'Count': len(users_viewed_no_action),
                 'Absolute %': calc_pct(len(users_viewed_no_action), total_users_metadata),
                 'Relative %': calc_pct(len(users_viewed_no_action), len(users_viewed)) if len(users_viewed) > 0 else 0,
@@ -765,8 +765,8 @@ with tab1:
                 'Disliked at least 1': 'rgba(239, 68, 68, 0.3)',         # Red
                 'Passed at least 1': 'rgba(234, 179, 8, 0.3)',           # Yellow
                 'Got Match (mutual like)': 'rgba(16, 185, 129, 0.4)',    # Emerald
-                'Users No Action Yet': 'rgba(107, 114, 128, 0.3)',       # Dark gray
-                'Users Viewed but No Action': 'rgba(249, 115, 22, 0.3)', # Deep orange
+                'Users Never Viewed': 'rgba(107, 114, 128, 0.3)',          # Dark gray
+                'Users Viewed but Never Decided': 'rgba(249, 115, 22, 0.3)', # Deep orange
             }
             bg_color = color_map.get(stage, '')
             if bg_color:
