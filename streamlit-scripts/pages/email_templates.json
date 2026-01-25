@@ -1,0 +1,35 @@
+{
+  "default_template": "rough_template23",
+  "templates": {
+    "rough_template": {
+      "male": {
+        "subject": "aaaa",
+        "content": "aaaaa"
+      },
+      "female": {
+        "subject": "bbbb",
+        "content": "bbbb"
+      }
+    },
+    "rough_template2": {
+      "male": {
+        "subject": "aaaa",
+        "content": "aaaaa"
+      },
+      "female": {
+        "subject": "bbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsas",
+        "content": "bbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsas"
+      }
+    },
+    "rough_template23": {
+      "male": {
+        "subject": "aaaa",
+        "content": "aaaaaasdasdasdads"
+      },
+      "female": {
+        "subject": "bbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsas",
+        "content": "bbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsasbbbbadsas"
+      }
+    }
+  }
+}

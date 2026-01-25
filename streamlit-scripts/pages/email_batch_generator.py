@@ -8,6 +8,7 @@ import sys
 import re
 import io
 import csv
+import json
 from urllib.parse import quote
 from datetime import datetime
 from dotenv import load_dotenv
@@ -44,6 +45,80 @@ jayanth@heywavelength.com
 vinit@heywavelength.com
 ishaan@heywavelength.com
 chetan@heywavelength.com"""
+
+TEMPLATES_FILE = os.path.join(os.path.dirname(__file__), "email_templates.json")
+
+# --- Template Functions ---
+
+def load_templates() -> dict:
+    """Load templates from JSON file."""
+    if os.path.exists(TEMPLATES_FILE):
+        with open(TEMPLATES_FILE, 'r') as f:
+            return json.load(f)
+    return {"default_template": None, "templates": {}}
+
+
+def save_templates(data: dict):
+    """Save templates to JSON file."""
+    with open(TEMPLATES_FILE, 'w') as f:
+        json.dump(data, f, indent=2)
+
+
+def get_template_names() -> list[str]:
+    """Get list of template names."""
+    data = load_templates()
+    return list(data.get("templates", {}).keys())
+
+
+def get_template(name: str) -> dict | None:
+    """Get a specific template by name."""
+    data = load_templates()
+    return data.get("templates", {}).get(name)
+
+
+def get_default_template() -> str | None:
+    """Get the default template name."""
+    data = load_templates()
+    return data.get("default_template")
+
+
+def set_default_template(name: str | None):
+    """Set the default template."""
+    data = load_templates()
+    data["default_template"] = name
+    save_templates(data)
+
+
+def add_template(name: str, male_subject: str, male_content: str, female_subject: str, female_content: str):
+    """Add a new template."""
+    data = load_templates()
+    data["templates"][name] = {
+        "male": {"subject": male_subject, "content": male_content},
+        "female": {"subject": female_subject, "content": female_content}
+    }
+    save_templates(data)
+
+
+def delete_template(key: str):
+    """Delete a template."""
+    data = load_templates()
+    if key in data.get("templates", {}):
+        del data["templates"][key]
+        if data.get("default_template") == key:
+            data["default_template"] = None
+        save_templates(data)
+
+
+def rename_template(old_name: str, new_name: str):
+    """Rename a template."""
+    data = load_templates()
+    if old_name in data.get("templates", {}):
+        template = data["templates"].pop(old_name)
+        data["templates"][new_name] = template
+        if data.get("default_template") == old_name:
+            data["default_template"] = new_name
+        save_templates(data)
+
 
 # --- Helper Functions ---
 
@@ -297,6 +372,131 @@ if 'ebg_male_csv' not in st.session_state:
     st.session_state.ebg_male_csv = None
 if 'ebg_female_csv' not in st.session_state:
     st.session_state.ebg_female_csv = None
+if 'ebg_selected_template' not in st.session_state:
+    st.session_state.ebg_selected_template = get_default_template()
+
+# --- Template Management Sidebar ---
+def on_template_change():
+    """Callback when template selection changes."""
+    selected = st.session_state.ebg_template_selector
+    if selected == "No Template":
+        st.session_state.ebg_selected_template = None
+        # Set empty values
+        st.session_state.ebg_subject_male = ""
+        st.session_state.ebg_content_male = ""
+        st.session_state.ebg_subject_female = ""
+        st.session_state.ebg_content_female = ""
+    else:
+        st.session_state.ebg_selected_template = selected
+        # Load template values directly into session state
+        template_data = get_template(selected)
+        if template_data:
+            st.session_state.ebg_subject_male = template_data.get("male", {}).get("subject", "")
+            st.session_state.ebg_content_male = template_data.get("male", {}).get("content", "")
+            st.session_state.ebg_subject_female = template_data.get("female", {}).get("subject", "")
+            st.session_state.ebg_content_female = template_data.get("female", {}).get("content", "")
+
+with st.sidebar:
+    st.header("Template Manager")
+
+    # Clear add form if flag is set
+    if st.session_state.get('ebg_clear_add_form'):
+        for key in ['ebg_new_name', 'ebg_new_male_subject', 'ebg_new_male_content', 'ebg_new_female_subject', 'ebg_new_female_content']:
+            if key in st.session_state:
+                del st.session_state[key]
+        del st.session_state.ebg_clear_add_form
+
+    templates = get_template_names()
+    default_template = get_default_template()
+
+    # Template Selector
+    template_options = ["No Template"] + templates
+    current_idx = 0
+    if st.session_state.ebg_selected_template and st.session_state.ebg_selected_template in templates:
+        current_idx = template_options.index(st.session_state.ebg_selected_template)
+
+    st.selectbox(
+        "Select Template",
+        template_options,
+        index=current_idx,
+        key="ebg_template_selector",
+        on_change=on_template_change
+    )
+
+    # Show default indicator
+    if default_template:
+        st.caption(f"Default: **{default_template}**")
+    else:
+        st.caption("Default: *No template*")
+
+    st.divider()
+
+    # --- Add New Template ---
+    with st.expander("Add New Template", expanded=False):
+        new_name = st.text_input("Template Name", placeholder="My Template", key="ebg_new_name")
+
+        st.markdown("**Male Content**")
+        new_male_subject = st.text_input("Male Subject", key="ebg_new_male_subject")
+        new_male_content = st.text_area("Male Content", height=100, key="ebg_new_male_content")
+
+        st.markdown("**Female Content**")
+        new_female_subject = st.text_input("Female Subject", key="ebg_new_female_subject")
+        new_female_content = st.text_area("Female Content", height=100, key="ebg_new_female_content")
+
+        if st.button("Add Template", type="primary", use_container_width=True, key="ebg_add_template_btn"):
+            if new_name:
+                if new_name in templates:
+                    st.error("Template already exists!")
+                else:
+                    add_template(new_name, new_male_subject, new_male_content, new_female_subject, new_female_content)
+                    # Select the newly added template
+                    st.session_state.ebg_selected_template = new_name
+                    st.session_state.ebg_subject_male = new_male_subject
+                    st.session_state.ebg_content_male = new_male_content
+                    st.session_state.ebg_subject_female = new_female_subject
+                    st.session_state.ebg_content_female = new_female_content
+                    # Set flag to clear form on next run
+                    st.session_state.ebg_clear_add_form = True
+                    st.success(f"Added: {new_name}")
+                    st.rerun()
+            else:
+                st.error("Template name required!")
+
+    # --- Manage Existing Templates ---
+    if templates:
+        with st.expander("Manage Templates", expanded=False):
+            manage_template = st.selectbox("Select Template to Manage", templates, key="ebg_manage_select")
+
+            if manage_template:
+                # Rename
+                st.markdown("**Rename**")
+                new_template_name = st.text_input("New Name", value=manage_template, key="ebg_rename_name")
+                if st.button("Rename", key="ebg_rename_btn"):
+                    if new_template_name and new_template_name != manage_template:
+                        if new_template_name in templates:
+                            st.error("Name already exists!")
+                        else:
+                            rename_template(manage_template, new_template_name)
+                            if st.session_state.ebg_selected_template == manage_template:
+                                st.session_state.ebg_selected_template = new_template_name
+                            st.success("Renamed!")
+                            st.rerun()
+
+                st.markdown("---")
+
+                # Set as Default
+                if st.button("Set as Default", key="ebg_set_default_btn", use_container_width=True):
+                    set_default_template(manage_template)
+                    st.success(f"Default set to: {manage_template}")
+                    st.rerun()
+
+                # Delete
+                if st.button("Delete Template", type="secondary", key="ebg_delete_btn", use_container_width=True):
+                    delete_template(manage_template)
+                    st.warning(f"Deleted: {manage_template}")
+                    if st.session_state.ebg_selected_template == manage_template:
+                        st.session_state.ebg_selected_template = None
+                    st.rerun()
 
 # --- Main UI ---
 st.title("Email Batch Generator")
@@ -364,28 +564,35 @@ st.divider()
 # Email Content Section
 st.subheader("2. Email Content")
 
+# Load template values if a template is selected
+selected_template_data = None
+if st.session_state.ebg_selected_template:
+    selected_template_data = get_template(st.session_state.ebg_selected_template)
+
+# Default values (empty if no template)
+default_male_subject = ""
+default_male_content = ""
+default_female_subject = ""
+default_female_content = ""
+
+if selected_template_data:
+    default_male_subject = selected_template_data.get("male", {}).get("subject", "")
+    default_male_content = selected_template_data.get("male", {}).get("content", "")
+    default_female_subject = selected_template_data.get("female", {}).get("subject", "")
+    default_female_content = selected_template_data.get("female", {}).get("content", "")
+    st.info(f"Using template: **{st.session_state.ebg_selected_template}**")
+else:
+    st.warning("No template selected. Enter content manually or select a template from sidebar.")
+
 col1, col2 = st.columns(2)
 
 with col1:
     st.markdown("**Male**")
-    subject_male = st.text_input("Subject (Male)", value="You have been shortlisted for a Christmas Date", key="ebg_subject_male")
+    subject_male = st.text_input("Subject (Male)", value=default_male_subject, key="ebg_subject_male")
     content_male = st.text_area(
         "Content (Male)",
         height=250,
-        value="""Hey,
-
-This is Ishaan from Wavelength. We have a few recommendations for you for a Christmas date (some of them have liked you back too:p)
-
-Have a look here: app.heywavelength.com/chat
-
-Don't chase the "best" - shortlist the ones you feel might shortlist you back
-
-And if it's a match, we're treating you to an all-expense-paid date at Bastian on 25th December.
-
-PS: Pls join our whatsapp community to receive notifs about upcoming recos: https://chat.whatsapp.com/LBFvmIadWAV2ugH6jOmIRd
-
-Regards,
-Team Wavelength""",
+        value=default_male_content,
         key="ebg_content_male"
     )
 
@@ -398,26 +605,13 @@ with col2:
 
     subject_female = st.text_input(
         "Subject (Female)",
-        value=st.session_state.get('ebg_subject_female', "You have been shortlisted for a Christmas Date"),
+        value=st.session_state.get('ebg_subject_female', default_female_subject),
         key="ebg_subject_female"
     )
     content_female = st.text_area(
         "Content (Female)",
         height=250,
-        value=st.session_state.get('ebg_content_female', """Hey,
-
-This is Ishaan from Wavelength. We have a few recommendations for you for a Christmas date (some of them have liked you back too:p)
-
-Have a look here: app.heywavelength.com/chat
-
-Don't chase the "best" - shortlist the ones you feel might shortlist you back
-
-And if it's a match, we're treating you to an all-expense-paid date at Bastian on 25th December.
-
-PS: Pls join our whatsapp community to receive notifs about upcoming recos: https://chat.whatsapp.com/KZfU52fVD0FBfwHhROV1rm
-
-Regards,
-Team Wavelength"""),
+        value=st.session_state.get('ebg_content_female', default_female_content),
         key="ebg_content_female"
     )
 
