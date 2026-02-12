@@ -5,7 +5,7 @@ import streamlit as st
 from typing import Optional
 from datetime import datetime, timedelta
 from collections import defaultdict
-from .supabase import supabase, fetch_all, fetch_with_filter, batch_fetch, get_supabase_client
+from .supabase import supabase, fetch_all, fetch_all_actual_test, fetch_with_filter, batch_fetch, get_supabase_client
 from config import CACHE_TTL_SHORT, CACHE_TTL_MEDIUM
 
 # 30 minute TTL for growth dashboard (1800 seconds)
@@ -563,3 +563,93 @@ class AnalyticsService:
                 'previous_signups': 0,
                 'growth_rate': 0,
             }
+
+
+# ============================================================================
+# SPIRIT ANIMAL CONVERSION TRACKER
+# ============================================================================
+
+@st.cache_data(ttl=CACHE_TTL_GROWTH)
+def get_spirit_animal_conversion_data() -> dict:
+    """
+    Cross-reference spirit animal quiz completions (actual-test DB) with
+    account creation (user_data, prod) and onboarding (user_metadata, prod).
+
+    Returns dict with counts, rates, and email lists for drill-down.
+    """
+    try:
+        # 1. Fetch all quiz completion emails from actual-test DB
+        quiz_results = fetch_all_actual_test('spirit_animal_results', 'email, created_at')
+        quiz_emails = set()
+        email_counts = {}
+        for r in quiz_results:
+            email = r.get('email')
+            if email:
+                normalized = email.strip().lower()
+                quiz_emails.add(normalized)
+                email_counts[normalized] = email_counts.get(normalized, 0) + 1
+
+        duplicate_emails = {e: c for e, c in email_counts.items() if c > 1}
+
+        # 2. Fetch all signed-up users from prod DB (user_data)
+        signups = fetch_all('user_data', 'user_id, user_email')
+        email_to_user_id = {}
+        for s in signups:
+            email = s.get('user_email')
+            if email:
+                email_to_user_id[email.strip().lower()] = s.get('user_id')
+
+        signup_emails = set(email_to_user_id.keys())
+
+        # 3. Fetch all onboarded user_ids from prod DB (user_metadata)
+        onboarded = fetch_all('user_metadata', 'user_id')
+        onboarded_user_ids = set(u.get('user_id') for u in onboarded if u.get('user_id'))
+
+        # 4. Cross-reference
+        signed_up_emails = quiz_emails & signup_emails
+        not_signed_up_emails = quiz_emails - signup_emails
+
+        # Find which signed-up users also onboarded
+        signed_up_user_ids = {email_to_user_id[e] for e in signed_up_emails if e in email_to_user_id}
+        onboarded_from_quiz = signed_up_user_ids & onboarded_user_ids
+
+        # Build onboarded emails set for drill-down
+        user_id_to_email = {v: k for k, v in email_to_user_id.items()}
+        onboarded_emails = {user_id_to_email[uid] for uid in onboarded_from_quiz if uid in user_id_to_email}
+        signed_up_not_onboarded = signed_up_emails - onboarded_emails
+
+        total_quiz = len(quiz_emails)
+        total_signed_up = len(signed_up_emails)
+        total_onboarded = len(onboarded_from_quiz)
+
+        return {
+            'total_quiz_completions': total_quiz,
+            'total_quiz_rows': len(quiz_results),
+            'total_signed_up': total_signed_up,
+            'total_onboarded': total_onboarded,
+            'quiz_to_signup_rate': (total_signed_up / total_quiz * 100) if total_quiz > 0 else 0,
+            'signup_to_onboard_rate': (total_onboarded / total_signed_up * 100) if total_signed_up > 0 else 0,
+            'quiz_to_onboard_rate': (total_onboarded / total_quiz * 100) if total_quiz > 0 else 0,
+            'not_signed_up_emails': sorted(not_signed_up_emails),
+            'signed_up_not_onboarded_emails': sorted(signed_up_not_onboarded),
+            'onboarded_emails': sorted(onboarded_emails),
+            'duplicate_emails': dict(sorted(duplicate_emails.items(), key=lambda x: x[1], reverse=True)),
+            'cached_at': datetime.now().isoformat(),
+        }
+
+    except Exception as e:
+        return {
+            'total_quiz_completions': 0,
+            'total_quiz_rows': 0,
+            'total_signed_up': 0,
+            'total_onboarded': 0,
+            'quiz_to_signup_rate': 0,
+            'signup_to_onboard_rate': 0,
+            'quiz_to_onboard_rate': 0,
+            'not_signed_up_emails': [],
+            'signed_up_not_onboarded_emails': [],
+            'onboarded_emails': [],
+            'duplicate_emails': {},
+            'cached_at': datetime.now().isoformat(),
+            'error': str(e),
+        }

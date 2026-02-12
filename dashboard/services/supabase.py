@@ -11,9 +11,13 @@ from supabase import create_client, Client
 env_path = Path(__file__).parent.parent.parent / '.env'
 load_dotenv(env_path)
 
-# Get credentials
+# Get credentials (prod - default)
 SUPABASE_URL = os.getenv('SUPABASE_URL')
 SUPABASE_KEY = os.getenv('SUPABASE_SERVICE_ROLE_KEY')
+
+# Actual-test DB credentials
+SUPABASE_URL_ACTUAL_TEST = os.getenv('SUPABASE_URL_ACTUAL_TEST')
+SUPABASE_KEY_ACTUAL_TEST = os.getenv('SUPABASE_KEY_ACTUAL_TEST')
 
 # Pagination constants
 READ_PAGE_SIZE = 500
@@ -200,6 +204,53 @@ def batch_insert(table: str, records: list) -> bool:
         client.table(table).insert(chunk).execute()
 
     return True
+
+
+@st.cache_resource
+def get_actual_test_client() -> Client:
+    """Get cached Supabase client for actual-test DB."""
+    if not SUPABASE_URL_ACTUAL_TEST or not SUPABASE_KEY_ACTUAL_TEST:
+        raise ValueError(
+            f"Actual-test Supabase credentials not configured. "
+            f"URL={bool(SUPABASE_URL_ACTUAL_TEST)}, KEY={bool(SUPABASE_KEY_ACTUAL_TEST)}. "
+            f"Set SUPABASE_URL_ACTUAL_TEST and SUPABASE_KEY_ACTUAL_TEST in .env"
+        )
+    return create_client(SUPABASE_URL_ACTUAL_TEST, SUPABASE_KEY_ACTUAL_TEST)
+
+
+def fetch_all_actual_test(table: str, select: str = '*', filters: dict = None, order_by: str = None, desc: bool = False) -> list:
+    """
+    Fetch all records from a table in the actual-test DB with pagination.
+    Same interface as fetch_all but uses the actual-test client.
+    """
+    client = get_actual_test_client()
+    all_data = []
+    offset = 0
+
+    while True:
+        query = client.table(table).select(select)
+
+        if filters:
+            for col, val in filters.items():
+                query = query.eq(col, val)
+
+        if order_by:
+            query = query.order(order_by, desc=desc)
+
+        query = query.range(offset, offset + READ_PAGE_SIZE - 1)
+
+        response = query.execute()
+        if not response.data:
+            break
+
+        all_data.extend(response.data)
+
+        if len(response.data) < READ_PAGE_SIZE:
+            break
+
+        offset += READ_PAGE_SIZE
+
+    return all_data
 
 
 def batch_update(table: str, records: list, id_column: str = 'id') -> bool:
