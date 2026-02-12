@@ -40,18 +40,12 @@ slotting_review = st.Page(
     "pages/7_slotting_review.py",
     title="Slotting Review",
 )
-spirit_animal_tracker = st.Page(
-    "pages/8_spirit_animal_tracker.py",
-    title="Spirit Animal Tracker",
-)
-
 # --- Navigation ---
 pg = st.navigation(
     {
         "Overview": [growth_dashboard, demographics],
         "Users": [profile_360],
         "Analytics": [funnel, matchmaking_stats, slotting_review],
-        "Conversion": [spirit_animal_tracker],
         "Operations": [human_review],
     }
 )
