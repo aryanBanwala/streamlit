@@ -3,6 +3,7 @@ Lambda Admin Dashboard - Main Entry Point
 All admin tools accessible from one place.
 """
 import streamlit as st
+from streamlit_oauth import OAuth2Component
 
 # --- Page Config (must be first) ---
 st.set_page_config(
@@ -11,6 +12,98 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# --- Google OAuth Configuration (from .streamlit/secrets.toml) ---
+GOOGLE_CLIENT_ID = st.secrets["auth"]["google"]["client_id"]
+GOOGLE_CLIENT_SECRET = st.secrets["auth"]["google"]["client_secret"]
+REDIRECT_URI = st.secrets["auth"]["redirect_uri"]
+
+# Allowed domains (e.g., "heywavelength.com") - from secrets.toml
+ALLOWED_DOMAINS = [d.lower() for d in st.secrets.get("auth", {}).get("allowed_domains", [])]
+
+def check_access(email: str) -> bool:
+    """Check if email domain is allowed."""
+    if not ALLOWED_DOMAINS:
+        return True  # If no allowlist configured, allow all authenticated users
+    email_domain = email.lower().split("@")[-1]
+    return email_domain in ALLOWED_DOMAINS
+
+# --- Authentication ---
+# Use session state for auth
+if "user_email" not in st.session_state:
+    st.session_state.user_email = None
+
+# Check if user is logged in
+if not st.session_state.user_email:
+    # Hide sidebar when not logged in
+    st.markdown("""
+        <style>
+            [data-testid="stSidebar"] {display: none;}
+            [data-testid="stSidebarNav"] {display: none;}
+        </style>
+    """, unsafe_allow_html=True)
+
+    st.title("Lambda Admin Login")
+    st.write("Please sign in with your Google account to continue.")
+
+    if not GOOGLE_CLIENT_ID or not GOOGLE_CLIENT_SECRET:
+        st.error("Google OAuth not configured. Set GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET environment variables.")
+        st.stop()
+
+    oauth2 = OAuth2Component(
+        client_id=GOOGLE_CLIENT_ID,
+        client_secret=GOOGLE_CLIENT_SECRET,
+        authorize_endpoint="https://accounts.google.com/o/oauth2/v2/auth",
+        token_endpoint="https://oauth2.googleapis.com/token",
+    )
+
+    result = oauth2.authorize_button(
+        name="Sign in with Google",
+        redirect_uri=REDIRECT_URI,
+        scope="openid email profile",
+        key="google_oauth",
+        use_container_width=True,
+        extras_params={"prompt": "select_account"},
+        pkce="S256",
+    )
+
+    if result and "token" in result:
+        import requests
+        # Get user info from Google
+        access_token = result["token"]["access_token"]
+        user_info = requests.get(
+            "https://www.googleapis.com/oauth2/v3/userinfo",
+            headers={"Authorization": f"Bearer {access_token}"}
+        ).json()
+        st.session_state.user_email = user_info.get("email")
+        st.rerun()
+
+    st.stop()
+
+# Check if user's email is allowed
+user_email = st.session_state.user_email
+if not check_access(user_email):
+    # Hide sidebar for unauthorized users
+    st.markdown("""
+        <style>
+            [data-testid="stSidebar"] {display: none;}
+            [data-testid="stSidebarNav"] {display: none;}
+        </style>
+    """, unsafe_allow_html=True)
+
+    st.error(f"Access denied. Your email ({user_email}) is not authorized.")
+    st.write("Please contact an administrator to request access.")
+    if st.button("Sign out", key="signout_denied"):
+        st.session_state.user_email = None
+        st.rerun()
+    st.stop()
+
+# Show logged in user in sidebar
+with st.sidebar:
+    st.write(f"Logged in as: **{user_email}**")
+    if st.button("Sign out", key="signout_sidebar"):
+        st.session_state.user_email = None
+        st.rerun()
 
 # --- Define all pages ---
 home_page = st.Page("pages/home.py", title="Home", icon="🏠", default=True)
