@@ -28,6 +28,7 @@ slotting_viewer_page = st.Page("pages/slotting_viewer.py", title="Slotting Viewe
 bidirectional_viewer_page = st.Page("pages/bidirectional_viewer.py", title="Bidirectional Viewer", icon="🔄")
 pair_scoring_page = st.Page("pages/pair_scoring.py", title="Pair Scoring", icon="🎯")
 email_batch_page = st.Page("pages/email_batch_generator.py", title="Email Batch Generator", icon="📧")
+poker_finaliser_page = st.Page("pages/poker_finaliser.py", title="Poker Finaliser", icon="🃏")
 marked_ghosted_page = st.Page("pages/marked_ghosted.py", title="Marked Ghosted", icon="👻")
 match_analytics_page = st.Page("pages/match_analytics.py", title="Match Analytics", icon="📊")
 spirit_animal_page = st.Page("pages/spirit_animal_tracker.py", title="Spirit Animal Tracker", icon="🐾")
@@ -39,7 +40,7 @@ pg = st.navigation(
         "User Management": [waitlist_page, human_approval_page, remove_users_page, image_manager_page, match_status_page, physical_compat_page, attractiveness_page, user_segments_page, marked_ghosted_page],
         "Analytics": [chat_viewer_page, match_stats_page, match_analytics_page, slotting_viewer_page, bidirectional_viewer_page, pair_scoring_page],
         "Conversion": [spirit_animal_page],
-        "Tools": [email_batch_page],
+        "Tools": [email_batch_page, poker_finaliser_page],
     }
 )
 
