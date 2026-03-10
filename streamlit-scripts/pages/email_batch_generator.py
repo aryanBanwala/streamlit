@@ -224,6 +224,49 @@ def parse_user_ids(input_text: str) -> tuple[list[str], list[dict]]:
     return validated_ids, errors
 
 
+def parse_email_addresses(input_text: str) -> tuple[list[str], list[dict]]:
+    """
+    Parse email addresses from various formats.
+    Returns (valid_emails, errors)
+
+    Supported formats:
+    - Comma separated: email1@x.com, email2@x.com
+    - Newline separated (one per line)
+    - Mixed formats
+    """
+    errors = []
+    valid_emails = []
+
+    if not input_text.strip():
+        return [], [{"position": 0, "message": "Input is empty", "context": ""}]
+
+    text = input_text.strip()
+    # Split by comma or newline
+    text = text.replace('\n', ',')
+    parts = text.split(',')
+
+    for i, part in enumerate(parts):
+        part = part.strip().strip('"\'')
+        if not part:
+            continue
+
+        # Basic email validation
+        email_pattern = r'^[^\s@]+@[^\s@]+\.[^\s@]+$'
+        if re.match(email_pattern, part):
+            valid_emails.append(part)
+        else:
+            pos = input_text.find(part)
+            line_num = input_text[:pos].count('\n') + 1 if pos >= 0 else 0
+            errors.append({
+                "position": i + 1,
+                "message": "Invalid email format",
+                "context": f"'{part}' at line ~{line_num}",
+                "value": part
+            })
+
+    return valid_emails, errors
+
+
 def detect_syntax_errors(input_text: str) -> list[dict]:
     """Detect common syntax errors in the input."""
     errors = []
@@ -374,6 +417,16 @@ if 'ebg_female_csv' not in st.session_state:
     st.session_state.ebg_female_csv = None
 if 'ebg_selected_template' not in st.session_state:
     st.session_state.ebg_selected_template = get_default_template()
+if 'ebg_input_mode' not in st.session_state:
+    st.session_state.ebg_input_mode = "User IDs"
+if 'ebg_parsed_male_emails' not in st.session_state:
+    st.session_state.ebg_parsed_male_emails = []
+if 'ebg_parsed_female_emails' not in st.session_state:
+    st.session_state.ebg_parsed_female_emails = []
+if 'ebg_email_parse_errors_male' not in st.session_state:
+    st.session_state.ebg_email_parse_errors_male = []
+if 'ebg_email_parse_errors_female' not in st.session_state:
+    st.session_state.ebg_email_parse_errors_female = []
 
 # --- Template Management Sidebar ---
 def on_template_change():
@@ -502,62 +555,146 @@ with st.sidebar:
 st.title("Email Batch Generator")
 st.caption("Generate Gmail batch links for sending emails to users")
 
-# User IDs Input
-st.subheader("1. User IDs Input")
-st.markdown("""
-**Supported formats:**
-- List format: `["id1", "id2", "id3"]`
-- Quoted comma separated: `"id1", "id2", "id3"`
-- Plain comma separated: `id1, id2, id3`
-- Newline separated (one per line)
-""")
-
-user_ids_input = st.text_area(
-    "Enter User IDs",
-    height=200,
-    placeholder='Paste user IDs here...\n\nExamples:\n"b6e3260c-2150-4b24-a249-ce48807fcc19", "43f1bb97-25bf-4835-97bf-4be3fd25224c"\n\nOR\n\nb6e3260c-2150-4b24-a249-ce48807fcc19\n43f1bb97-25bf-4835-97bf-4be3fd25224c',
-    key="ebg_user_ids_input"
+# Input Mode Toggle
+st.subheader("1. Input")
+input_mode = st.radio(
+    "Input Mode",
+    ["User IDs", "Email Addresses"],
+    horizontal=True,
+    key="ebg_input_mode",
+    help="Choose whether to input user IDs (fetches emails from database) or paste email addresses directly"
 )
 
-# Parse button
-if st.button("Parse & Validate", type="primary", key="ebg_parse_btn"):
-    if user_ids_input:
-        # Check syntax first
-        st.session_state.ebg_syntax_errors = detect_syntax_errors(user_ids_input)
+if input_mode == "User IDs":
+    st.markdown("""
+    **Supported formats:**
+    - List format: `["id1", "id2", "id3"]`
+    - Quoted comma separated: `"id1", "id2", "id3"`
+    - Plain comma separated: `id1, id2, id3`
+    - Newline separated (one per line)
+    """)
 
-        # Parse IDs
-        parsed_ids, parse_errors = parse_user_ids(user_ids_input)
-        st.session_state.ebg_parsed_ids = parsed_ids
-        st.session_state.ebg_parse_errors = parse_errors
-        st.session_state.ebg_fetched_users = None  # Reset fetched users
+    user_ids_input = st.text_area(
+        "Enter User IDs",
+        height=200,
+        placeholder='Paste user IDs here...\n\nExamples:\n"b6e3260c-2150-4b24-a249-ce48807fcc19", "43f1bb97-25bf-4835-97bf-4be3fd25224c"\n\nOR\n\nb6e3260c-2150-4b24-a249-ce48807fcc19\n43f1bb97-25bf-4835-97bf-4be3fd25224c',
+        key="ebg_user_ids_input"
+    )
+
+    # Parse button
+    if st.button("Parse & Validate", type="primary", key="ebg_parse_btn"):
+        if user_ids_input:
+            # Check syntax first
+            st.session_state.ebg_syntax_errors = detect_syntax_errors(user_ids_input)
+
+            # Parse IDs
+            parsed_ids, parse_errors = parse_user_ids(user_ids_input)
+            st.session_state.ebg_parsed_ids = parsed_ids
+            st.session_state.ebg_parse_errors = parse_errors
+            st.session_state.ebg_fetched_users = None  # Reset fetched users
+            st.session_state.ebg_male_csv = None
+            st.session_state.ebg_female_csv = None
+
+    # Display parsing results
+    if st.session_state.ebg_syntax_errors:
+        st.error("Syntax Errors Found:")
+        for err in st.session_state.ebg_syntax_errors:
+            st.markdown(f"""
+            <div style="background-color: #3d1f1f; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ff4b4b;">
+                <strong>Line {err.get('line', '?')}:</strong> {err['message']}<br>
+                {f"<code>{err.get('context', '')}</code>" if err.get('context') else ""}
+            </div>
+            """, unsafe_allow_html=True)
+
+    if st.session_state.ebg_parse_errors:
+        st.warning(f"{len(st.session_state.ebg_parse_errors)} Invalid User ID(s):")
+        for err in st.session_state.ebg_parse_errors:
+            st.markdown(f"""
+            <div style="background-color: #3d3d1f; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ffbb33;">
+                <strong>#{err['position']}:</strong> {err['message']}<br>
+                <code>{err.get('context', err.get('value', ''))}</code>
+            </div>
+            """, unsafe_allow_html=True)
+
+    if st.session_state.ebg_parsed_ids:
+        st.success(f"{len(st.session_state.ebg_parsed_ids)} valid User IDs parsed")
+        with st.expander("Show parsed IDs"):
+            st.code("\n".join(st.session_state.ebg_parsed_ids))
+
+else:
+    # Email Addresses mode
+    st.markdown("Paste email addresses directly — comma or newline separated.")
+
+    email_col1, email_col2 = st.columns(2)
+
+    with email_col1:
+        st.markdown("**Male Emails**")
+        male_emails_input = st.text_area(
+            "Enter Male Emails",
+            height=200,
+            placeholder="john@example.com\nalex@example.com\n...",
+            key="ebg_male_emails_input"
+        )
+
+    with email_col2:
+        st.markdown("**Female Emails**")
+        female_emails_input = st.text_area(
+            "Enter Female Emails",
+            height=200,
+            placeholder="jane@example.com\nkate@example.com\n...",
+            key="ebg_female_emails_input"
+        )
+
+    if st.button("Parse & Validate", type="primary", key="ebg_parse_emails_btn"):
         st.session_state.ebg_male_csv = None
         st.session_state.ebg_female_csv = None
 
-# Display parsing results
-if st.session_state.ebg_syntax_errors:
-    st.error("Syntax Errors Found:")
-    for err in st.session_state.ebg_syntax_errors:
-        st.markdown(f"""
-        <div style="background-color: #3d1f1f; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ff4b4b;">
-            <strong>Line {err.get('line', '?')}:</strong> {err['message']}<br>
-            {f"<code>{err.get('context', '')}</code>" if err.get('context') else ""}
-        </div>
-        """, unsafe_allow_html=True)
+        # Parse male emails
+        if male_emails_input and male_emails_input.strip():
+            parsed_male, errors_male = parse_email_addresses(male_emails_input)
+            st.session_state.ebg_parsed_male_emails = parsed_male
+            st.session_state.ebg_email_parse_errors_male = errors_male
+        else:
+            st.session_state.ebg_parsed_male_emails = []
+            st.session_state.ebg_email_parse_errors_male = []
 
-if st.session_state.ebg_parse_errors:
-    st.warning(f"{len(st.session_state.ebg_parse_errors)} Invalid User ID(s):")
-    for err in st.session_state.ebg_parse_errors:
-        st.markdown(f"""
-        <div style="background-color: #3d3d1f; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ffbb33;">
-            <strong>#{err['position']}:</strong> {err['message']}<br>
-            <code>{err.get('context', err.get('value', ''))}</code>
-        </div>
-        """, unsafe_allow_html=True)
+        # Parse female emails
+        if female_emails_input and female_emails_input.strip():
+            parsed_female, errors_female = parse_email_addresses(female_emails_input)
+            st.session_state.ebg_parsed_female_emails = parsed_female
+            st.session_state.ebg_email_parse_errors_female = errors_female
+        else:
+            st.session_state.ebg_parsed_female_emails = []
+            st.session_state.ebg_email_parse_errors_female = []
 
-if st.session_state.ebg_parsed_ids:
-    st.success(f"{len(st.session_state.ebg_parsed_ids)} valid User IDs parsed")
-    with st.expander("Show parsed IDs"):
-        st.code("\n".join(st.session_state.ebg_parsed_ids))
+    # Display email parsing results
+    if st.session_state.ebg_email_parse_errors_male:
+        st.warning(f"{len(st.session_state.ebg_email_parse_errors_male)} invalid male email(s):")
+        for err in st.session_state.ebg_email_parse_errors_male:
+            st.markdown(f"""
+            <div style="background-color: #3d3d1f; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ffbb33;">
+                <strong>#{err['position']}:</strong> {err['message']}<br>
+                <code>{err.get('context', err.get('value', ''))}</code>
+            </div>
+            """, unsafe_allow_html=True)
+
+    if st.session_state.ebg_email_parse_errors_female:
+        st.warning(f"{len(st.session_state.ebg_email_parse_errors_female)} invalid female email(s):")
+        for err in st.session_state.ebg_email_parse_errors_female:
+            st.markdown(f"""
+            <div style="background-color: #3d3d1f; padding: 10px; border-radius: 5px; margin: 5px 0; border-left: 4px solid #ffbb33;">
+                <strong>#{err['position']}:</strong> {err['message']}<br>
+                <code>{err.get('context', err.get('value', ''))}</code>
+            </div>
+            """, unsafe_allow_html=True)
+
+    result_col1, result_col2 = st.columns(2)
+    with result_col1:
+        if st.session_state.ebg_parsed_male_emails:
+            st.success(f"{len(st.session_state.ebg_parsed_male_emails)} valid male emails parsed")
+    with result_col2:
+        if st.session_state.ebg_parsed_female_emails:
+            st.success(f"{len(st.session_state.ebg_parsed_female_emails)} valid female emails parsed")
 
 st.divider()
 
@@ -643,91 +780,130 @@ with gen_col2:
     )
 
 with gen_col1:
-    generate_clicked = st.button("Generate CSV Downloads", type="primary", disabled=len(st.session_state.ebg_parsed_ids) == 0, key="ebg_generate_btn", use_container_width=True)
+    if input_mode == "User IDs":
+        generate_disabled = len(st.session_state.ebg_parsed_ids) == 0
+    else:
+        generate_disabled = len(st.session_state.ebg_parsed_male_emails) == 0 and len(st.session_state.ebg_parsed_female_emails) == 0
+
+    generate_clicked = st.button("Generate CSV Downloads", type="primary", disabled=generate_disabled, key="ebg_generate_btn", use_container_width=True)
 
 if generate_clicked:
-    if not st.session_state.ebg_parsed_ids:
-        st.error("Please parse user IDs first!")
+    if input_mode == "User IDs":
+        # --- User IDs mode: fetch from Supabase ---
+        if not st.session_state.ebg_parsed_ids:
+            st.error("Please parse user IDs first!")
+        else:
+            with st.spinner("Fetching user data from Supabase..."):
+                user_ids = st.session_state.ebg_parsed_ids
+
+                # Batch queries to avoid PostgREST URL length limits
+                BATCH_SIZE = 100
+                user_data_all = []
+                user_metadata_all = []
+
+                for i in range(0, len(user_ids), BATCH_SIZE):
+                    batch = user_ids[i:i + BATCH_SIZE]
+
+                    # Fetch emails from user_data
+                    user_data_res = supabase.table("user_data").select("user_id, user_email").in_("user_id", batch).execute()
+                    user_data_all.extend(user_data_res.data or [])
+
+                    # Fetch gender from user_metadata
+                    user_metadata_res = supabase.table("user_metadata").select("user_id, gender").in_("user_id", batch).execute()
+                    user_metadata_all.extend(user_metadata_res.data or [])
+
+                if not user_data_all:
+                    st.error("No users found in database!")
+                else:
+                    # Merge data
+                    users = []
+                    for ud in user_data_all:
+                        metadata = next((um for um in user_metadata_all if um['user_id'] == ud['user_id']), None)
+                        users.append({
+                            "user_id": ud['user_id'],
+                            "user_email": ud.get('user_email'),
+                            "gender": metadata.get('gender') if metadata else None
+                        })
+
+                    st.session_state.ebg_fetched_users = users
+
+                    # Separate by gender
+                    male_users = [u for u in users if u.get('gender', '').lower() == 'male' and u.get('user_email')]
+                    female_users = [u for u in users if u.get('gender', '').lower() == 'female' and u.get('user_email')]
+
+                    # Parse test emails
+                    test_emails = [e.strip() for e in test_emails_input.strip().split('\n') if e.strip()]
+
+                    # Generate batches
+                    male_emails = [u['user_email'] for u in male_users]
+                    female_emails = [u['user_email'] for u in female_users]
+
+                    male_batches = batch_emails(male_emails, subject_male, content_male)
+                    female_batches = batch_emails(female_emails, subject_female, content_female)
+
+                    # Generate CSVs
+                    st.session_state.ebg_male_csv = generate_csv_content(male_batches, male_users, subject_male, content_male, test_emails, "male", email_field)
+                    st.session_state.ebg_female_csv = generate_csv_content(female_batches, female_users, subject_female, content_female, test_emails, "female", email_field)
+
+                    # Show summary
+                    st.success("CSVs Generated!")
+
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Total Users Fetched", len(users))
+                    with col2:
+                        st.metric("Male Users", f"{len(male_users)} ({len(male_batches)} batches)")
+                    with col3:
+                        st.metric("Female Users", f"{len(female_users)} ({len(female_batches)} batches)")
+
+                    # Show warnings
+                    no_email = [u for u in users if not u.get('user_email')]
+                    no_gender = [u for u in users if not u.get('gender')]
+                    not_found = set(user_ids) - set(u['user_id'] for u in users)
+
+                    if no_email:
+                        st.warning(f"{len(no_email)} user(s) without email")
+                    if no_gender:
+                        st.warning(f"{len(no_gender)} user(s) without gender")
+                    if not_found:
+                        st.warning(f"{len(not_found)} user ID(s) not found in database")
+                        with st.expander("Show not found IDs"):
+                            st.code("\n".join(not_found))
+
     else:
-        with st.spinner("Fetching user data from Supabase..."):
-            user_ids = st.session_state.ebg_parsed_ids
+        # --- Email Addresses mode: use emails directly ---
+        male_emails_list = st.session_state.ebg_parsed_male_emails
+        female_emails_list = st.session_state.ebg_parsed_female_emails
 
-            # Batch queries to avoid PostgREST URL length limits
-            BATCH_SIZE = 100
-            user_data_all = []
-            user_metadata_all = []
+        if not male_emails_list and not female_emails_list:
+            st.error("Please parse email addresses first!")
+        else:
+            # Parse test emails
+            test_emails = [e.strip() for e in test_emails_input.strip().split('\n') if e.strip()]
 
-            for i in range(0, len(user_ids), BATCH_SIZE):
-                batch = user_ids[i:i + BATCH_SIZE]
+            # Generate batches
+            male_batches = batch_emails(male_emails_list, subject_male, content_male) if male_emails_list else []
+            female_batches = batch_emails(female_emails_list, subject_female, content_female) if female_emails_list else []
 
-                # Fetch emails from user_data
-                user_data_res = supabase.table("user_data").select("user_id, user_email").in_("user_id", batch).execute()
-                user_data_all.extend(user_data_res.data or [])
+            # Build pseudo-user lists (no user_id, just email)
+            male_users = [{"user_id": "N/A", "user_email": e} for e in male_emails_list]
+            female_users = [{"user_id": "N/A", "user_email": e} for e in female_emails_list]
 
-                # Fetch gender from user_metadata
-                user_metadata_res = supabase.table("user_metadata").select("user_id, gender").in_("user_id", batch).execute()
-                user_metadata_all.extend(user_metadata_res.data or [])
+            # Generate CSVs
+            st.session_state.ebg_male_csv = generate_csv_content(male_batches, male_users, subject_male, content_male, test_emails, "male", email_field) if male_emails_list else None
+            st.session_state.ebg_female_csv = generate_csv_content(female_batches, female_users, subject_female, content_female, test_emails, "female", email_field) if female_emails_list else None
 
-            if not user_data_all:
-                st.error("No users found in database!")
-            else:
-                # Merge data
-                users = []
-                for ud in user_data_all:
-                    metadata = next((um for um in user_metadata_all if um['user_id'] == ud['user_id']), None)
-                    users.append({
-                        "user_id": ud['user_id'],
-                        "user_email": ud.get('user_email'),
-                        "gender": metadata.get('gender') if metadata else None
-                    })
+            # Show summary
+            st.success("CSVs Generated!")
 
-                st.session_state.ebg_fetched_users = users
-
-                # Separate by gender
-                male_users = [u for u in users if u.get('gender', '').lower() == 'male' and u.get('user_email')]
-                female_users = [u for u in users if u.get('gender', '').lower() == 'female' and u.get('user_email')]
-
-                # Parse test emails
-                test_emails = [e.strip() for e in test_emails_input.strip().split('\n') if e.strip()]
-
-                # Generate batches
-                male_emails = [u['user_email'] for u in male_users]
-                female_emails = [u['user_email'] for u in female_users]
-
-                male_batches = batch_emails(male_emails, subject_male, content_male)
-                female_batches = batch_emails(female_emails, subject_female, content_female)
-
-                # Generate CSVs
-                st.session_state.ebg_male_csv = generate_csv_content(male_batches, male_users, subject_male, content_male, test_emails, "male", email_field)
-                st.session_state.ebg_female_csv = generate_csv_content(female_batches, female_users, subject_female, content_female, test_emails, "female", email_field)
-
-                # Show summary
-                st.success("CSVs Generated!")
-
-                col1, col2, col3 = st.columns(3)
-                with col1:
-                    st.metric("Total Users Fetched", len(users))
-                with col2:
-                    st.metric("Male Users", f"{len(male_users)} ({len(male_batches)} batches)")
-                with col3:
-                    st.metric("Female Users", f"{len(female_users)} ({len(female_batches)} batches)")
-
-                # Show warnings
-                no_email = [u for u in users if not u.get('user_email')]
-                no_gender = [u for u in users if not u.get('gender')]
-                not_found = set(user_ids) - set(u['user_id'] for u in users)
-
-                if no_email:
-                    st.warning(f"{len(no_email)} user(s) without email")
-                if no_gender:
-                    st.warning(f"{len(no_gender)} user(s) without gender")
-                if not_found:
-                    st.warning(f"{len(not_found)} user ID(s) not found in database")
-                    with st.expander("Show not found IDs"):
-                        st.code("\n".join(not_found))
+            col1, col2 = st.columns(2)
+            with col1:
+                st.metric("Male Emails", f"{len(male_emails_list)} ({len(male_batches)} batches)")
+            with col2:
+                st.metric("Female Emails", f"{len(female_emails_list)} ({len(female_batches)} batches)")
 
 # Download buttons
-if st.session_state.ebg_male_csv and st.session_state.ebg_female_csv:
+if st.session_state.ebg_male_csv or st.session_state.ebg_female_csv:
     st.divider()
     st.subheader("Download CSVs")
 
@@ -736,19 +912,21 @@ if st.session_state.ebg_male_csv and st.session_state.ebg_female_csv:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.download_button(
-            label="Download Male CSV",
-            data=st.session_state.ebg_male_csv,
-            file_name=f"male_email_batches_{timestamp}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        if st.session_state.ebg_male_csv:
+            st.download_button(
+                label="Download Male CSV",
+                data=st.session_state.ebg_male_csv,
+                file_name=f"male_email_batches_{timestamp}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
 
     with col2:
-        st.download_button(
-            label="Download Female CSV",
-            data=st.session_state.ebg_female_csv,
-            file_name=f"female_email_batches_{timestamp}.csv",
-            mime="text/csv",
-            use_container_width=True
-        )
+        if st.session_state.ebg_female_csv:
+            st.download_button(
+                label="Download Female CSV",
+                data=st.session_state.ebg_female_csv,
+                file_name=f"female_email_batches_{timestamp}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
