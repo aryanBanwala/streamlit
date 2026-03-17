@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 import streamlit as st
 import os
 import sys
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
 from supabase import create_client
@@ -90,6 +91,58 @@ def parse_matches_json(data):
 # =========== SUPABASE FETCHERS (profiles + photos) ===========
 
 @st.cache_data(ttl=300, show_spinner=False)
+def fetch_genders_batch(user_ids_tuple):
+    """Fetch only user_id + gender for all users (lightweight)."""
+    user_ids = list(user_ids_tuple)
+    if not user_ids:
+        return {}
+    sb = get_client()
+    result = {}
+    for i in range(0, len(user_ids), 50):
+        chunk = user_ids[i:i + 50]
+        resp = sb.from_("user_profile_data").select("user_id, gender").in_("user_id", chunk).execute()
+        for r in (resp.data or []):
+            result[r["user_id"]] = r.get("gender", "unknown") or "unknown"
+    return result
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_ai_processing_batch(user_ids_tuple):
+    """Fetch attractiveness_score and attractiveness_reasoning from ai_processing_state."""
+    user_ids = list(user_ids_tuple)
+    if not user_ids:
+        return {}
+    sb = get_client()
+    result = {}
+    for i in range(0, len(user_ids), 50):
+        chunk = user_ids[i:i + 50]
+        resp = sb.from_("ai_processing_state").select(
+            "user_id, attractiveness_score, attractiveness_reasoning"
+        ).in_("user_id", chunk).execute()
+        for r in (resp.data or []):
+            result[r["user_id"]] = r
+    return result
+
+
+@st.cache_data(ttl=300, show_spinner=False)
+def fetch_matchmaking_state_batch(user_ids_tuple):
+    """Fetch prof_tier and prof_tier_reason from matchmaking_user_state."""
+    user_ids = list(user_ids_tuple)
+    if not user_ids:
+        return {}
+    sb = get_client()
+    result = {}
+    for i in range(0, len(user_ids), 50):
+        chunk = user_ids[i:i + 50]
+        resp = sb.from_("matchmaking_user_state").select(
+            "user_id, prof_tier, prof_tier_reason"
+        ).in_("user_id", chunk).execute()
+        for r in (resp.data or []):
+            result[r["user_id"]] = r
+    return result
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_profiles_batch(user_ids_tuple):
     """Fetch user_profile_data for a batch of user_ids."""
     user_ids = list(user_ids_tuple)
@@ -153,12 +206,19 @@ def fetch_photos_batch(user_ids_tuple):
 
 
 def fetch_page_data(user_ids):
-    """Fetch profiles and photos in parallel."""
+    """Fetch profiles, photos, AI processing state, and matchmaking state in parallel."""
     ids_tuple = tuple(user_ids)
-    with ThreadPoolExecutor(max_workers=2) as executor:
+    with ThreadPoolExecutor(max_workers=4) as executor:
         profile_future = executor.submit(fetch_profiles_batch, ids_tuple)
         photo_future = executor.submit(fetch_photos_batch, ids_tuple)
-        return profile_future.result(), photo_future.result()
+        ai_future = executor.submit(fetch_ai_processing_batch, ids_tuple)
+        mm_future = executor.submit(fetch_matchmaking_state_batch, ids_tuple)
+        return (
+            profile_future.result(),
+            photo_future.result(),
+            ai_future.result(),
+            mm_future.result(),
+        )
 
 
 # =========== HELPERS ===========
@@ -179,7 +239,7 @@ def origin_badge(phase):
     return f'<span style="background:{color}; color:white; padding:2px 8px; border-radius:4px; font-size:12px; font-weight:600;">{phase}</span>'
 
 
-def render_user_card(profile, photos, photo_scale):
+def render_user_card(profile, photos, photo_scale, ai_state=None, mm_state=None):
     """Render a user's info + photos."""
     if not profile:
         st.warning("Profile not found")
@@ -204,6 +264,28 @@ def render_user_card(profile, photos, photo_scale):
     st.caption(f"{city} · {height}\" · {religion}")
     st.caption(f"Work: {work}")
     st.caption(f"Edu: {edu}")
+
+    # Attractiveness & Prof Tier
+    ai = ai_state or {}
+    mm = mm_state or {}
+    attr_score = ai.get("attractiveness_score")
+    prof_tier = mm.get("prof_tier", "?")
+    tier_colors = {"S": "#4caf50", "A": "#8bc34a", "B": "#ff9800", "C": "#f44336", "D": "#9e9e9e"}
+    tier_color = tier_colors.get(str(prof_tier).upper()[:1], "#607d8b")
+    st.markdown(
+        f'Attractiveness: **{round(attr_score, 2) if attr_score is not None else "N/A"}** &nbsp;&nbsp; '
+        f'Prof Tier: <span style="background:{tier_color}; color:white; padding:1px 6px; border-radius:4px; font-size:12px; font-weight:600;">{prof_tier}</span>',
+        unsafe_allow_html=True,
+    )
+    attr_reason = ai.get("attractiveness_reasoning")
+    tier_reason = mm.get("prof_tier_reason")
+    if attr_reason or tier_reason:
+        with st.expander("Reasoning", expanded=False):
+            if attr_reason:
+                st.markdown(f"**Attractiveness:** {attr_reason}")
+            if tier_reason:
+                st.markdown(f"**Prof Tier:** {tier_reason}")
+
     st.code(profile.get("user_id", ""), language=None)
 
     # Photos
@@ -248,6 +330,12 @@ st.sidebar.markdown("### Filters")
 available_phases = sorted(set(m["origin_phase"] for m in all_matches))
 phase_filter = st.sidebar.selectbox("Origin Phase", ["All"] + available_phases)
 
+# Gender sort — detect available genders from data
+_all_uids_for_gender = list(set(uid for m in all_matches for uid in [m["user_a"], m["user_b"]]))
+_gender_map_preview = fetch_genders_batch(tuple(sorted(_all_uids_for_gender)))
+_available_genders = sorted(set(_gender_map_preview.values()) - {"unknown"})
+gender_sort = st.sidebar.selectbox("Group by Gender", ["None"] + _available_genders)
+
 # Photo scale
 photo_scale = st.sidebar.slider("Photo Size (%)", min_value=20, max_value=100, value=60, step=10,
                                  help="Scale photos on screen")
@@ -270,6 +358,31 @@ st.sidebar.markdown(f"**Zero matches:** {run_stats.get('users_with_zero', '?')}"
 # Apply phase filter
 if phase_filter != "All":
     all_matches = [m for m in all_matches if m["origin_phase"] == phase_filter]
+
+# Apply gender grouping
+if gender_sort != "None":
+    gender_map = _gender_map_preview
+
+    # For each match, find the user(s) matching the selected gender
+    # Group: { user_id -> [matches] } for users of the selected gender
+    grouped = OrderedDict()
+    ungrouped = []
+    for m in all_matches:
+        a_gender = gender_map.get(m["user_a"], "unknown")
+        b_gender = gender_map.get(m["user_b"], "unknown")
+        if a_gender == gender_sort:
+            grouped.setdefault(m["user_a"], []).append(m)
+        elif b_gender == gender_sort:
+            grouped.setdefault(m["user_b"], []).append(m)
+        else:
+            ungrouped.append(m)
+
+    # Rebuild all_matches: each group's matches sorted by score, then ungrouped at the end
+    all_matches = []
+    for uid, matches in grouped.items():
+        matches.sort(key=lambda x: x.get("mutual_score") or 0, reverse=True)
+        all_matches.extend(matches)
+    all_matches.extend(ungrouped)
 
 total = len(all_matches)
 
@@ -336,7 +449,7 @@ page_user_ids = list(set(
 
 # --- Batch fetch profiles + photos from Supabase ---
 with st.spinner("Loading profiles & photos..."):
-    profiles, photos = fetch_page_data(page_user_ids)
+    profiles, photos, ai_states, mm_states = fetch_page_data(page_user_ids)
 
 # --- Render each match pair ---
 for idx, match in enumerate(page_matches):
@@ -421,11 +534,13 @@ for idx, match in enumerate(page_matches):
 
     with col_a:
         st.markdown("**User A**")
-        render_user_card(profile_a, photos.get(user_a, []), photo_scale)
+        render_user_card(profile_a, photos.get(user_a, []), photo_scale,
+                         ai_states.get(user_a), mm_states.get(user_a))
 
     with col_b:
         st.markdown("**User B**")
-        render_user_card(profile_b, photos.get(user_b, []), photo_scale)
+        render_user_card(profile_b, photos.get(user_b, []), photo_scale,
+                         ai_states.get(user_b), mm_states.get(user_b))
 
     # Bottom reject button
     if not is_rejected:
