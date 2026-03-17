@@ -307,6 +307,135 @@ def render_user_card(profile, photos, photo_scale, ai_state=None, mm_state=None)
             )
 
 
+def parse_display_metadata(data):
+    """Parse display_metadata_samples into a lookup dict keyed by sorted pair tuple."""
+    samples = data.get("display_metadata_samples", [])
+    lookup = {}
+    for sample in samples:
+        u1 = sample.get("user_1_id", "")
+        u2 = sample.get("user_2_id", "")
+        if not u1 or not u2:
+            continue
+        pair_key = tuple(sorted([u1, u2]))
+        lookup[pair_key] = sample
+    return lookup
+
+
+def sign_storage_paths(paths):
+    """Sign a list of storage paths and return {path: signed_url}."""
+    if not paths:
+        return {}
+    sb = get_client()
+    signed_map = {}
+    try:
+        results = sb.storage.from_("media").create_signed_urls(paths, SIGNED_URL_EXPIRY)
+        for item in results:
+            p = item.get("path", "")
+            url = item.get("signedURL") or item.get("signedUrl", "")
+            if p:
+                signed_map[p] = url
+    except Exception:
+        pass
+    return signed_map
+
+
+def render_display_section(section, signed_urls):
+    """Render a single display data section as a styled card."""
+    sec_type = section.get("type", "")
+    title = section.get("title", "")
+    content = section.get("content", "")
+
+    if sec_type == "paragraph":
+        st.markdown(
+            f'<div style="background:#1e1e2e; border-radius:12px; padding:16px 20px; margin-bottom:12px;">'
+            f'<p style="color:#a0a0b8; font-size:11px; text-transform:uppercase; letter-spacing:1px; margin:0 0 6px 0;">{title}</p>'
+            f'<p style="color:#e0e0e8; font-size:14px; line-height:1.6; margin:0;">{content}</p>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    elif sec_type == "display_picture":
+        url = signed_urls.get(content, "")
+        if url:
+            st.markdown(
+                f'<div style="border-radius:12px; overflow:hidden; margin-bottom:12px;">'
+                f'<img src="{url}" style="width:100%; border-radius:12px;" />'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+    elif sec_type == "profile_card":
+        fields = content.get("fields", []) if isinstance(content, dict) else []
+        title_field = content.get("titleField", {}) if isinstance(content, dict) else {}
+        subtitle_field = content.get("subtitleField", {}) if isinstance(content, dict) else {}
+
+        name_val = title_field.get("value", "?")
+        age_val = subtitle_field.get("value", "?")
+
+        card_fields_html = ""
+        for f in fields:
+            if f.get("show_on_card") or f.get("show_in_drawer"):
+                emoji = f.get("emoji", "")
+                label = f.get("label", "")
+                value = f.get("value", "")
+                card_fields_html += (
+                    f'<div style="display:inline-block; background:#2a2a3e; border-radius:8px; padding:6px 12px; margin:4px; font-size:13px;">'
+                    f'{emoji} <span style="color:#8888a0;">{label}:</span> <span style="color:#e0e0e8;">{value}</span>'
+                    f'</div>'
+                )
+
+        st.markdown(
+            f'<div style="background:#1e1e2e; border-radius:12px; padding:20px; margin-bottom:12px;">'
+            f'<p style="color:#ffffff; font-size:20px; font-weight:700; margin:0 0 2px 0;">{name_val}</p>'
+            f'<p style="color:#a0a0b8; font-size:14px; margin:0 0 12px 0;">Age: {age_val}</p>'
+            f'<div style="display:flex; flex-wrap:wrap; gap:4px;">{card_fields_html}</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    elif sec_type == "timeline":
+        items = content if isinstance(content, list) else []
+        timeline_html = ""
+        for i, item in enumerate(items):
+            timeline_html += (
+                f'<div style="display:flex; gap:12px; margin-bottom:12px;">'
+                f'<div style="display:flex; flex-direction:column; align-items:center;">'
+                f'<div style="width:10px; height:10px; border-radius:50%; background:#6366f1; margin-top:5px;"></div>'
+                f'{"<div style=\"width:2px; flex:1; background:#333;\"></div>" if i < len(items) - 1 else ""}'
+                f'</div>'
+                f'<p style="color:#e0e0e8; font-size:13px; line-height:1.5; margin:0; padding-bottom:4px;">{item}</p>'
+                f'</div>'
+            )
+        st.markdown(
+            f'<div style="background:#1e1e2e; border-radius:12px; padding:16px 20px; margin-bottom:12px;">'
+            f'<p style="color:#a0a0b8; font-size:11px; text-transform:uppercase; letter-spacing:1px; margin:0 0 12px 0;">{title}</p>'
+            f'{timeline_html}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    elif sec_type == "photos":
+        photos_list = content if isinstance(content, list) else []
+        photos_html = ""
+        for p in photos_list:
+            path = p.get("path", "")
+            url = signed_urls.get(path, "")
+            if url:
+                photos_html += (
+                    f'<div style="width:48%; border-radius:8px; overflow:hidden; margin-bottom:8px;">'
+                    f'<img src="{url}" style="width:100%; border-radius:8px;" />'
+                    f'</div>'
+                )
+        if photos_html:
+            st.markdown(
+                f'<div style="background:#1e1e2e; border-radius:12px; padding:16px 20px; margin-bottom:12px;">'
+                f'<p style="color:#a0a0b8; font-size:11px; text-transform:uppercase; letter-spacing:1px; margin:0 0 12px 0;">{title}</p>'
+                f'<div style="display:flex; flex-wrap:wrap; gap:8px; justify-content:flex-start;">{photos_html}</div>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+
+
 # ============== UI ==============
 
 st.markdown("#### Match Review")
@@ -322,6 +451,7 @@ if not uploaded_file:
 # Parse JSON
 raw = json.loads(uploaded_file.read())
 all_matches, run_stats = parse_matches_json(raw)
+display_lookup = parse_display_metadata(raw)
 
 # --- Sidebar filters ---
 st.sidebar.markdown("### Filters")
@@ -406,147 +536,246 @@ if total == 0:
     st.info("No matches found for this filter.")
     st.stop()
 
-# --- Pagination ---
-total_pages = (total + MATCHES_PER_PAGE - 1) // MATCHES_PER_PAGE
-if "mr_page" not in st.session_state:
-    st.session_state.mr_page = 1
-if st.session_state.mr_page > total_pages:
-    st.session_state.mr_page = total_pages
+# --- Tabs ---
+tab_review, tab_display = st.tabs(["Match Review", "Display Data"])
 
+# ===================== TAB 1: MATCH REVIEW =====================
+with tab_review:
+    # --- Pagination ---
+    total_pages = (total + MATCHES_PER_PAGE - 1) // MATCHES_PER_PAGE
+    if "mr_page" not in st.session_state:
+        st.session_state.mr_page = 1
+    if st.session_state.mr_page > total_pages:
+        st.session_state.mr_page = total_pages
 
-def _go_prev():
-    st.session_state.mr_page = max(1, st.session_state.mr_page - 1)
+    def _go_prev():
+        st.session_state.mr_page = max(1, st.session_state.mr_page - 1)
 
-def _go_next():
-    st.session_state.mr_page = min(total_pages, st.session_state.mr_page + 1)
+    def _go_next():
+        st.session_state.mr_page = min(total_pages, st.session_state.mr_page + 1)
 
-def render_pagination(suffix):
-    """Render pagination controls. suffix differentiates top/bottom widget keys."""
-    col_prev, col_info, col_next = st.columns([1, 3, 1])
-    with col_prev:
-        st.button("← Prev", disabled=st.session_state.mr_page <= 1,
-                  use_container_width=True, key=f"mr_prev_{suffix}", on_click=_go_prev)
-    with col_info:
+    def render_pagination(suffix):
+        col_prev, col_info, col_next = st.columns([1, 3, 1])
+        with col_prev:
+            st.button("← Prev", disabled=st.session_state.mr_page <= 1,
+                      use_container_width=True, key=f"mr_prev_{suffix}", on_click=_go_prev)
+        with col_info:
+            st.markdown(
+                f"<p style='text-align:center; margin:8px 0; color:grey;'>"
+                f"Page {st.session_state.mr_page} / {total_pages} &nbsp;&middot;&nbsp; {total} pairs</p>",
+                unsafe_allow_html=True,
+            )
+        with col_next:
+            st.button("Next →", disabled=st.session_state.mr_page >= total_pages,
+                      use_container_width=True, key=f"mr_next_{suffix}", on_click=_go_next)
+
+    render_pagination("top")
+
+    start = (st.session_state.mr_page - 1) * MATCHES_PER_PAGE
+    page_matches = all_matches[start:start + MATCHES_PER_PAGE]
+
+    page_user_ids = list(set(
+        uid for m in page_matches for uid in [m["user_a"], m["user_b"]]
+    ))
+
+    with st.spinner("Loading profiles & photos..."):
+        profiles, photos, ai_states, mm_states = fetch_page_data(page_user_ids)
+
+    for idx, match in enumerate(page_matches):
+        user_a = match["user_a"]
+        user_b = match["user_b"]
+        score = match.get("mutual_score") or 0
+        phase = match.get("origin_phase", "?")
+        method = match.get("origin_method", "?")
+
+        profile_a = profiles.get(user_a, {})
+        profile_b = profiles.get(user_b, {})
+        name_a = profile_a.get("full_name") or "?"
+        name_b = profile_b.get("full_name") or "?"
+
+        st.markdown("---")
         st.markdown(
-            f"<p style='text-align:center; margin:8px 0; color:grey;'>"
-            f"Page {st.session_state.mr_page} / {total_pages} &nbsp;&middot;&nbsp; {total} pairs</p>",
+            f"##### Match #{start + idx + 1}: {name_a} & {name_b} &nbsp;&nbsp; "
+            f'<span style="font-size:14px;">Score: <b>{round(score, 4)}</b></span> &nbsp; '
+            f'{origin_badge(phase)}',
             unsafe_allow_html=True,
         )
-    with col_next:
-        st.button("Next →", disabled=st.session_state.mr_page >= total_pages,
-                  use_container_width=True, key=f"mr_next_{suffix}", on_click=_go_next)
 
+        meta_cols = st.columns(5)
+        with meta_cols[0]:
+            st.caption(f"Mutual: **{round(score, 4)}**")
+        with meta_cols[1]:
+            a_score = match.get("a_scores_b")
+            st.caption(f"A→B: **{round(a_score, 4) if a_score is not None else 'N/A'}**")
+        with meta_cols[2]:
+            b_score = match.get("b_scores_a")
+            st.caption(f"B→A: **{round(b_score, 4) if b_score is not None else 'N/A'}**")
+        with meta_cols[3]:
+            st.caption(f"Rank: **{match.get('rank', '?')}**")
+        with meta_cols[4]:
+            st.caption(f"Method: **{method}**")
 
-render_pagination("top")
+        if match.get("origin_metadata"):
+            with st.expander("Origin Metadata", expanded=False):
+                st.json(match["origin_metadata"])
 
-start = (st.session_state.mr_page - 1) * MATCHES_PER_PAGE
-page_matches = all_matches[start:start + MATCHES_PER_PAGE]
+        match_key = f"{user_a}_{user_b}"
+        reject_key = f"reject_{match_key}"
+        rejected_key = f"rejected_{match_key}"
+        is_rejected = match.get("rejected") or st.session_state.get(rejected_key)
 
-# Collect all user_ids for this page
-page_user_ids = list(set(
-    uid for m in page_matches for uid in [m["user_a"], m["user_b"]]
-))
+        if is_rejected:
+            st.error("**Rejected** — 1-week cooldown active for this pair.")
+        else:
+            if st.button("Reject Match", key=f"btn_reject_{match_key}_top", type="primary", use_container_width=True):
+                st.session_state[reject_key] = True
 
-# --- Batch fetch profiles + photos from Supabase ---
-with st.spinner("Loading profiles & photos..."):
-    profiles, photos, ai_states, mm_states = fetch_page_data(page_user_ids)
-
-# --- Render each match pair ---
-for idx, match in enumerate(page_matches):
-    user_a = match["user_a"]
-    user_b = match["user_b"]
-    score = match.get("mutual_score") or 0
-    phase = match.get("origin_phase", "?")
-    method = match.get("origin_method", "?")
-
-    profile_a = profiles.get(user_a, {})
-    profile_b = profiles.get(user_b, {})
-    name_a = profile_a.get("full_name") or "?"
-    name_b = profile_b.get("full_name") or "?"
-
-    # Header
-    st.markdown("---")
-    st.markdown(
-        f"##### Match #{start + idx + 1}: {name_a} & {name_b} &nbsp;&nbsp; "
-        f'<span style="font-size:14px;">Score: <b>{round(score, 4)}</b></span> &nbsp; '
-        f'{origin_badge(phase)}',
-        unsafe_allow_html=True,
-    )
-
-    # Match metadata row
-    meta_cols = st.columns(5)
-    with meta_cols[0]:
-        st.caption(f"Mutual: **{round(score, 4)}**")
-    with meta_cols[1]:
-        a_score = match.get("a_scores_b")
-        st.caption(f"A→B: **{round(a_score, 4) if a_score is not None else 'N/A'}**")
-    with meta_cols[2]:
-        b_score = match.get("b_scores_a")
-        st.caption(f"B→A: **{round(b_score, 4) if b_score is not None else 'N/A'}**")
-    with meta_cols[3]:
-        st.caption(f"Rank: **{match.get('rank', '?')}**")
-    with meta_cols[4]:
-        st.caption(f"Method: **{method}**")
-
-    if match.get("origin_metadata"):
-        with st.expander("Origin Metadata", expanded=False):
-            st.json(match["origin_metadata"])
-
-    # --- Reject logic ---
-    match_key = f"{user_a}_{user_b}"
-    reject_key = f"reject_{match_key}"
-    rejected_key = f"rejected_{match_key}"
-    is_rejected = match.get("rejected") or st.session_state.get(rejected_key)
-
-    if is_rejected:
-        st.error("**Rejected** — 1-week cooldown active for this pair.")
-    else:
-        # Top reject button
-        if st.button("Reject Match", key=f"btn_reject_{match_key}_top", type="primary", use_container_width=True):
-            st.session_state[reject_key] = True
-
-        if st.session_state.get(reject_key):
-            st.warning(f"**Reject {name_a} & {name_b}?** This will add a 1-week cooldown.")
-            c1, c2 = st.columns(2)
-            with c1:
-                if st.button("Yes, reject", key=f"btn_yes_{match_key}", type="primary", use_container_width=True):
-                    try:
-                        sb = get_client()
-                        expires = (datetime.now(timezone.utc) + timedelta(weeks=1)).isoformat()
-                        sb.rpc("upsert_match_cooldown", {
-                            "p_user_a": user_a,
-                            "p_user_b": user_b,
-                            "p_type": "manual_rejection",
-                            "p_expires_at": expires,
-                        }).execute()
+            if st.session_state.get(reject_key):
+                st.warning(f"**Reject {name_a} & {name_b}?** This will add a 1-week cooldown.")
+                c1, c2 = st.columns(2)
+                with c1:
+                    if st.button("Yes, reject", key=f"btn_yes_{match_key}", type="primary", use_container_width=True):
+                        try:
+                            sb = get_client()
+                            expires = (datetime.now(timezone.utc) + timedelta(weeks=1)).isoformat()
+                            sb.rpc("upsert_match_cooldown", {
+                                "p_user_a": user_a,
+                                "p_user_b": user_b,
+                                "p_type": "manual_rejection",
+                                "p_expires_at": expires,
+                            }).execute()
+                            st.session_state.pop(reject_key, None)
+                            st.session_state[rejected_key] = True
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"Failed: {e}")
+                with c2:
+                    if st.button("Cancel", key=f"btn_cancel_{match_key}", use_container_width=True):
                         st.session_state.pop(reject_key, None)
-                        st.session_state[rejected_key] = True
                         st.rerun()
-                    except Exception as e:
-                        st.error(f"Failed: {e}")
-            with c2:
-                if st.button("Cancel", key=f"btn_cancel_{match_key}", use_container_width=True):
-                    st.session_state.pop(reject_key, None)
-                    st.rerun()
 
-    # Side by side: User A | User B
-    col_a, col_b = st.columns(2)
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.markdown("**User A**")
+            render_user_card(profile_a, photos.get(user_a, []), photo_scale,
+                             ai_states.get(user_a), mm_states.get(user_a))
+        with col_b:
+            st.markdown("**User B**")
+            render_user_card(profile_b, photos.get(user_b, []), photo_scale,
+                             ai_states.get(user_b), mm_states.get(user_b))
 
-    with col_a:
-        st.markdown("**User A**")
-        render_user_card(profile_a, photos.get(user_a, []), photo_scale,
-                         ai_states.get(user_a), mm_states.get(user_a))
+        if not is_rejected:
+            if st.button("Reject Match", key=f"btn_reject_{match_key}_bottom", type="primary", use_container_width=True):
+                st.session_state[reject_key] = True
 
-    with col_b:
-        st.markdown("**User B**")
-        render_user_card(profile_b, photos.get(user_b, []), photo_scale,
-                         ai_states.get(user_b), mm_states.get(user_b))
+    st.markdown("---")
+    render_pagination("bottom")
 
-    # Bottom reject button
-    if not is_rejected:
-        if st.button("Reject Match", key=f"btn_reject_{match_key}_bottom", type="primary", use_container_width=True):
-            st.session_state[reject_key] = True
+# ===================== TAB 2: DISPLAY DATA =====================
+with tab_display:
+    display_samples = raw.get("display_metadata_samples", [])
 
-# --- Bottom pagination ---
-st.markdown("---")
-render_pagination("bottom")
+    if not display_samples:
+        st.info("No display data found in this JSON.")
+    else:
+        st.markdown(f"**{len(display_samples)} display data samples available**")
+
+        # Collect all storage paths that need signing
+        all_display_paths = []
+        for sample in display_samples:
+            for key in ("display_data_of_user_1", "display_data_of_user_2"):
+                for section in sample.get(key, []):
+                    if section.get("type") == "display_picture":
+                        all_display_paths.append(section.get("content", ""))
+                    elif section.get("type") == "photos":
+                        for p in (section.get("content", []) if isinstance(section.get("content"), list) else []):
+                            all_display_paths.append(p.get("path", ""))
+        all_display_paths = [p for p in all_display_paths if p]
+
+        with st.spinner("Signing display URLs..."):
+            display_signed_urls = sign_storage_paths(all_display_paths)
+
+        # Pagination for display tab
+        DISPLAY_PER_PAGE = MATCHES_PER_PAGE
+        display_total = len(display_samples)
+        display_total_pages = (display_total + DISPLAY_PER_PAGE - 1) // DISPLAY_PER_PAGE
+
+        if "dd_page" not in st.session_state:
+            st.session_state.dd_page = 1
+        if st.session_state.dd_page > display_total_pages:
+            st.session_state.dd_page = display_total_pages
+
+        def _dd_prev():
+            st.session_state.dd_page = max(1, st.session_state.dd_page - 1)
+
+        def _dd_next():
+            st.session_state.dd_page = min(display_total_pages, st.session_state.dd_page + 1)
+
+        def render_dd_pagination(suffix):
+            col_prev, col_info, col_next = st.columns([1, 3, 1])
+            with col_prev:
+                st.button("← Prev", disabled=st.session_state.dd_page <= 1,
+                          use_container_width=True, key=f"dd_prev_{suffix}", on_click=_dd_prev)
+            with col_info:
+                st.markdown(
+                    f"<p style='text-align:center; margin:8px 0; color:grey;'>"
+                    f"Page {st.session_state.dd_page} / {display_total_pages} &nbsp;&middot;&nbsp; {display_total} samples</p>",
+                    unsafe_allow_html=True,
+                )
+            with col_next:
+                st.button("Next →", disabled=st.session_state.dd_page >= display_total_pages,
+                          use_container_width=True, key=f"dd_next_{suffix}", on_click=_dd_next)
+
+        render_dd_pagination("top")
+
+        dd_start = (st.session_state.dd_page - 1) * DISPLAY_PER_PAGE
+        page_display = display_samples[dd_start:dd_start + DISPLAY_PER_PAGE]
+
+        # Fetch names for display pairs
+        dd_user_ids = list(set(
+            uid for s in page_display for uid in [s.get("user_1_id", ""), s.get("user_2_id", "")] if uid
+        ))
+        dd_profiles = fetch_profiles_batch(tuple(sorted(dd_user_ids)))
+
+        for idx, sample in enumerate(page_display):
+            u1 = sample.get("user_1_id", "")
+            u2 = sample.get("user_2_id", "")
+            success = sample.get("success", False)
+            name_1 = dd_profiles.get(u1, {}).get("full_name") or u1[:8]
+            name_2 = dd_profiles.get(u2, {}).get("full_name") or u2[:8]
+
+            st.markdown("---")
+            status_color = "#4caf50" if success else "#f44336"
+            st.markdown(
+                f"##### Pair #{dd_start + idx + 1}: {name_1} & {name_2} &nbsp;&nbsp; "
+                f'<span style="background:{status_color}; color:white; padding:2px 8px; border-radius:4px; font-size:12px;">{"Success" if success else "Failed"}</span>',
+                unsafe_allow_html=True,
+            )
+
+            # Two columns: what user_1 sees (about user_2) | what user_2 sees (about user_1)
+            col_1, col_2 = st.columns(2)
+
+            with col_1:
+                st.markdown(
+                    f'<p style="color:#6366f1; font-weight:700; font-size:15px; margin-bottom:8px;">'
+                    f'What {name_1} sees about {name_2}</p>',
+                    unsafe_allow_html=True,
+                )
+                sections_1 = sorted(sample.get("display_data_of_user_1", []),
+                                    key=lambda x: x.get("order", 0))
+                for section in sections_1:
+                    render_display_section(section, display_signed_urls)
+
+            with col_2:
+                st.markdown(
+                    f'<p style="color:#ec4899; font-weight:700; font-size:15px; margin-bottom:8px;">'
+                    f'What {name_2} sees about {name_1}</p>',
+                    unsafe_allow_html=True,
+                )
+                sections_2 = sorted(sample.get("display_data_of_user_2", []),
+                                    key=lambda x: x.get("order", 0))
+                for section in sections_2:
+                    render_display_section(section, display_signed_urls)
+
+        st.markdown("---")
+        render_dd_pagination("bottom")
