@@ -321,6 +321,20 @@ def parse_display_metadata(data):
     return lookup
 
 
+def parse_why_you_two(data):
+    """Parse why_you_two_results into a lookup dict keyed by sorted pair tuple."""
+    results = data.get("why_you_two_results", [])
+    lookup = {}
+    for item in results:
+        u1 = item.get("user_1_id", "")
+        u2 = item.get("user_2_id", "")
+        if not u1 or not u2:
+            continue
+        pair_key = tuple(sorted([u1, u2]))
+        lookup[pair_key] = item
+    return lookup
+
+
 def sign_storage_paths(paths):
     """Sign a list of storage paths and return {path: signed_url}."""
     if not paths:
@@ -452,9 +466,19 @@ if not uploaded_file:
 raw = json.loads(uploaded_file.read())
 all_matches, run_stats = parse_matches_json(raw)
 display_lookup = parse_display_metadata(raw)
+why_you_two_lookup = parse_why_you_two(raw)
 
 # --- Sidebar filters ---
 st.sidebar.markdown("### Filters")
+
+# Search by user_id
+_search_input = st.sidebar.text_input("Search User ID", placeholder="Paste a user_id to filter matches...")
+_search_clicked = st.sidebar.button("Search", use_container_width=True)
+if _search_clicked and _search_input:
+    st.session_state["search_user_id"] = _search_input.strip()
+elif _search_clicked and not _search_input:
+    st.session_state.pop("search_user_id", None)
+search_user_id = st.session_state.get("search_user_id", "")
 
 # Origin phase filter
 available_phases = sorted(set(m["origin_phase"] for m in all_matches))
@@ -488,6 +512,19 @@ st.sidebar.markdown(f"**Zero matches:** {run_stats.get('users_with_zero', '?')}"
 # Apply phase filter
 if phase_filter != "All":
     all_matches = [m for m in all_matches if m["origin_phase"] == phase_filter]
+
+# Apply user_id search — show only matches listed under that user in matches_by_user
+if search_user_id:
+    search_term = search_user_id.strip()
+    user_matched_ids = set()
+    for m in (raw.get("matches_by_user", {}).get(search_term, [])):
+        user_matched_ids.add(m["matched_user_id"])
+    if user_matched_ids:
+        all_matches = [m for m in all_matches
+                       if (m["user_a"] == search_term and m["user_b"] in user_matched_ids)
+                       or (m["user_b"] == search_term and m["user_a"] in user_matched_ids)]
+    else:
+        all_matches = []
 
 # Apply gender grouping
 if gender_sort != "None":
@@ -619,6 +656,20 @@ with tab_review:
             with st.expander("Origin Metadata", expanded=False):
                 st.json(match["origin_metadata"])
 
+        # Why You Two
+        pair_key = tuple(sorted([user_a, user_b]))
+        wyt = why_you_two_lookup.get(pair_key)
+        if wyt and wyt.get("success") and wyt.get("why_you_two"):
+            wyt_content = wyt["why_you_two"].get("content", "")
+            if wyt_content:
+                st.markdown(
+                    f'<div style="background:linear-gradient(135deg, #6366f1 0%, #ec4899 100%); border-radius:12px; padding:14px 20px; margin:8px 0;">'
+                    f'<p style="color:rgba(255,255,255,0.7); font-size:11px; text-transform:uppercase; letter-spacing:1px; margin:0 0 4px 0;">Why You Two</p>'
+                    f'<p style="color:#ffffff; font-size:15px; font-weight:500; line-height:1.5; margin:0;">{wyt_content}</p>'
+                    f'</div>',
+                    unsafe_allow_html=True,
+                )
+
         match_key = f"{user_a}_{user_b}"
         reject_key = f"reject_{match_key}"
         rejected_key = f"rejected_{match_key}"
@@ -674,6 +725,13 @@ with tab_review:
 # ===================== TAB 2: DISPLAY DATA =====================
 with tab_display:
     display_samples = raw.get("display_metadata_samples", [])
+
+    # Apply user_id search filter to display tab too
+    if search_user_id:
+        search_term = search_user_id.strip().lower()
+        display_samples = [s for s in display_samples
+                           if s.get("user_1_id", "").lower() == search_term
+                           or s.get("user_2_id", "").lower() == search_term]
 
     if not display_samples:
         st.info("No display data found in this JSON.")
