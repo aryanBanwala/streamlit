@@ -809,6 +809,11 @@ with tab_display:
                 f'<span style="background:{status_color}; color:white; padding:2px 8px; border-radius:4px; font-size:12px;">{"Success" if success else "Failed"}</span>',
                 unsafe_allow_html=True,
             )
+            id_col1, id_col2 = st.columns(2)
+            with id_col1:
+                st.code(u1, language=None)
+            with id_col2:
+                st.code(u2, language=None)
 
             # Two columns: what user_1 sees (about user_2) | what user_2 sees (about user_1)
             col_1, col_2 = st.columns(2)
