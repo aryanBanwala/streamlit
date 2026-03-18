@@ -95,11 +95,12 @@ elif st.session_state.dashboard == "new":
     new_home_page = st.Page("pages_new/home.py", title="Home", icon="🏠", default=True)
     quality_filtering_page = st.Page("pages_new/quality_filtering.py", title="Quality Filtering", icon="🔍")
     match_review_page = st.Page("pages_new/match_review.py", title="Match Review", icon="💘")
+    wyt_checker_page = st.Page("pages_new/why_you_two_checker.py", title="Why You Two Checker", icon="🎨")
 
     pg = st.navigation(
         {
             "📱 New Dashboard": [new_home_page],
-            "Review": [quality_filtering_page, match_review_page],
+            "Review": [quality_filtering_page, match_review_page, wyt_checker_page],
         }
     )
     pg.run()
