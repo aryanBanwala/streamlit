@@ -343,13 +343,13 @@ def sign_storage_paths(paths):
     signed_map = {}
     try:
         results = sb.storage.from_("media").create_signed_urls(paths, SIGNED_URL_EXPIRY)
-        for item in results:
-            p = item.get("path", "")
-            url = item.get("signedURL") or item.get("signedUrl", "")
-            if p:
+        for idx, item in enumerate(results):
+            p = item.get("path", "") or (paths[idx] if idx < len(paths) else "")
+            url = item.get("signedURL") or item.get("signedUrl") or item.get("signed_url", "")
+            if p and url:
                 signed_map[p] = url
-    except Exception:
-        pass
+    except Exception as e:
+        st.warning(f"Failed to sign storage paths: {e}")
     return signed_map
 
 
@@ -738,21 +738,6 @@ with tab_display:
     else:
         st.markdown(f"**{len(display_samples)} display data samples available**")
 
-        # Collect all storage paths that need signing
-        all_display_paths = []
-        for sample in display_samples:
-            for key in ("display_data_of_user_1", "display_data_of_user_2"):
-                for section in sample.get(key, []):
-                    if section.get("type") == "display_picture":
-                        all_display_paths.append(section.get("content", ""))
-                    elif section.get("type") == "photos":
-                        for p in (section.get("content", []) if isinstance(section.get("content"), list) else []):
-                            all_display_paths.append(p.get("path", ""))
-        all_display_paths = [p for p in all_display_paths if p]
-
-        with st.spinner("Signing display URLs..."):
-            display_signed_urls = sign_storage_paths(all_display_paths)
-
         # Pagination for display tab
         DISPLAY_PER_PAGE = MATCHES_PER_PAGE
         display_total = len(display_samples)
@@ -788,6 +773,21 @@ with tab_display:
 
         dd_start = (st.session_state.dd_page - 1) * DISPLAY_PER_PAGE
         page_display = display_samples[dd_start:dd_start + DISPLAY_PER_PAGE]
+
+        # Sign only current page's display paths
+        all_display_paths = []
+        for sample in page_display:
+            for key in ("display_data_of_user_1", "display_data_of_user_2"):
+                for section in sample.get(key, []):
+                    if section.get("type") == "display_picture":
+                        all_display_paths.append(section.get("content", ""))
+                    elif section.get("type") == "photos":
+                        for p in (section.get("content", []) if isinstance(section.get("content"), list) else []):
+                            all_display_paths.append(p.get("path", ""))
+        all_display_paths = [p for p in all_display_paths if p]
+
+        with st.spinner("Signing display URLs..."):
+            display_signed_urls = sign_storage_paths(all_display_paths)
 
         # Fetch names for display pairs
         dd_user_ids = list(set(
