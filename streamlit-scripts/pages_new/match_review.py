@@ -3,6 +3,7 @@ Match Review Dashboard
 Upload mutual_matches JSON from matchmaking pipeline, then review each pair side by side with photos and metadata.
 """
 import json
+import base64
 from datetime import datetime, timedelta, timezone
 import streamlit as st
 import os
@@ -10,7 +11,10 @@ import sys
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
 from dotenv import load_dotenv
-from supabase import create_client
+import psycopg2
+import psycopg2.extras
+from google.cloud import storage
+from google.oauth2 import service_account
 
 # --- Setup paths & env ---
 current_dir = os.path.dirname(__file__)
@@ -21,18 +25,80 @@ sys.path.insert(0, parent_dir)
 dotenv_path = os.path.join(parent_dir, '.env')
 load_dotenv(dotenv_path)
 
-SUPABASE_URL_APP = os.getenv("SUPABASE_URL_APP_PROD", "")
-SUPABASE_KEY_APP = os.getenv("SUPABASE_SERVICE_ROLE_KEY_APP_PROD", "")
+DB_HOST = os.getenv("DB_HOST", "")
+DB_PORT = os.getenv("DB_PORT", "5432")
+DB_NAME = os.getenv("DB_NAME", "")
+DB_USER = os.getenv("DB_USER", "")
+DB_PASSWORD = os.getenv("DB_PASSWORD", "")
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "")
+GCS_PROJECT_ID = os.getenv("GCS_PROJECT_ID", "")
+GCS_CREDENTIALS_BASE64 = os.getenv("GCS_CREDENTIALS_BASE64", "")
 
 SIGNED_URL_EXPIRY = 3600
 
 
-@st.cache_resource
-def get_client():
-    if not SUPABASE_URL_APP or not SUPABASE_KEY_APP:
-        st.error("Missing SUPABASE_URL_APP_PROD or SUPABASE_SERVICE_ROLE_KEY_APP_PROD in .env")
+def _new_db_conn():
+    if not DB_HOST or not DB_NAME:
+        st.error("Missing DB_HOST or DB_NAME in .env")
         st.stop()
-    return create_client(SUPABASE_URL_APP, SUPABASE_KEY_APP)
+    return psycopg2.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        dbname=DB_NAME,
+        user=DB_USER,
+        password=DB_PASSWORD,
+    )
+
+
+_conn_holder = {"conn": None}
+
+
+def get_db_conn():
+    conn = _conn_holder["conn"]
+    if conn is None or conn.closed:
+        _conn_holder["conn"] = _new_db_conn()
+    return _conn_holder["conn"]
+
+
+@st.cache_resource
+def get_gcs_bucket():
+    if GCS_CREDENTIALS_BASE64:
+        sa_info = json.loads(base64.b64decode(GCS_CREDENTIALS_BASE64))
+        creds = service_account.Credentials.from_service_account_info(sa_info)
+        client = storage.Client(project=GCS_PROJECT_ID, credentials=creds)
+    else:
+        client = storage.Client(project=GCS_PROJECT_ID)
+    return client.bucket(GCS_BUCKET_NAME)
+
+
+def _db_query(sql, params=None):
+    """Run a read query and return list of dicts."""
+    try:
+        conn = get_db_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
+    except (psycopg2.InterfaceError, psycopg2.OperationalError):
+        _conn_holder["conn"] = None
+        conn = get_db_conn()
+        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
+
+
+def _db_execute(sql, params=None):
+    """Run a write query (INSERT/UPDATE)."""
+    try:
+        conn = get_db_conn()
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+        conn.commit()
+    except (psycopg2.InterfaceError, psycopg2.OperationalError):
+        _conn_holder["conn"] = None
+        conn = get_db_conn()
+        with conn.cursor() as cur:
+            cur.execute(sql, params)
+        conn.commit()
 
 
 # =========== JSON PARSING ===========
@@ -90,20 +156,41 @@ def parse_matches_json(data):
 
 # =========== SUPABASE FETCHERS (profiles + photos) ===========
 
+def _gcs_sign_url(path):
+    """Generate a signed URL for a GCS object."""
+    bucket = get_gcs_bucket()
+    blob = bucket.blob(path)
+    return blob.generate_signed_url(
+        version="v4",
+        expiration=timedelta(seconds=SIGNED_URL_EXPIRY),
+        method="GET",
+    )
+
+
+def _gcs_sign_urls_batch(paths):
+    """Sign multiple GCS paths, return {path: signed_url}."""
+    if not paths:
+        return {}
+    signed_map = {}
+    for path in paths:
+        try:
+            signed_map[path] = _gcs_sign_url(path)
+        except Exception:
+            pass
+    return signed_map
+
+
 @st.cache_data(ttl=300, show_spinner=False)
 def fetch_genders_batch(user_ids_tuple):
     """Fetch only user_id + gender for all users (lightweight)."""
     user_ids = list(user_ids_tuple)
     if not user_ids:
         return {}
-    sb = get_client()
-    result = {}
-    for i in range(0, len(user_ids), 50):
-        chunk = user_ids[i:i + 50]
-        resp = sb.from_("user_profile_data").select("user_id, gender").in_("user_id", chunk).execute()
-        for r in (resp.data or []):
-            result[r["user_id"]] = r.get("gender", "unknown") or "unknown"
-    return result
+    rows = _db_query(
+        "SELECT user_id, gender FROM user_profile_data WHERE user_id = ANY(%s::uuid[])",
+        (user_ids,)
+    )
+    return {r["user_id"]: r.get("gender") or "unknown" for r in rows}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -112,16 +199,11 @@ def fetch_ai_processing_batch(user_ids_tuple):
     user_ids = list(user_ids_tuple)
     if not user_ids:
         return {}
-    sb = get_client()
-    result = {}
-    for i in range(0, len(user_ids), 50):
-        chunk = user_ids[i:i + 50]
-        resp = sb.from_("ai_processing_state").select(
-            "user_id, attractiveness_score, attractiveness_reasoning"
-        ).in_("user_id", chunk).execute()
-        for r in (resp.data or []):
-            result[r["user_id"]] = r
-    return result
+    rows = _db_query(
+        "SELECT user_id, attractiveness_score, attractiveness_reasoning FROM ai_processing_state WHERE user_id = ANY(%s::uuid[])",
+        (user_ids,)
+    )
+    return {r["user_id"]: dict(r) for r in rows}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -130,16 +212,11 @@ def fetch_matchmaking_state_batch(user_ids_tuple):
     user_ids = list(user_ids_tuple)
     if not user_ids:
         return {}
-    sb = get_client()
-    result = {}
-    for i in range(0, len(user_ids), 50):
-        chunk = user_ids[i:i + 50]
-        resp = sb.from_("matchmaking_user_state").select(
-            "user_id, prof_tier, prof_tier_reason"
-        ).in_("user_id", chunk).execute()
-        for r in (resp.data or []):
-            result[r["user_id"]] = r
-    return result
+    rows = _db_query(
+        "SELECT user_id, prof_tier, prof_tier_reason FROM matchmaking_user_state WHERE user_id = ANY(%s::uuid[])",
+        (user_ids,)
+    )
+    return {r["user_id"]: dict(r) for r in rows}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -148,18 +225,13 @@ def fetch_profiles_batch(user_ids_tuple):
     user_ids = list(user_ids_tuple)
     if not user_ids:
         return {}
-    sb = get_client()
-    # Supabase IN has a limit, batch in chunks of 50
-    all_results = {}
-    for i in range(0, len(user_ids), 50):
-        chunk = user_ids[i:i + 50]
-        resp = sb.from_("user_profile_data").select(
-            "user_id, full_name, gender, age, height, city, area, work, education, "
-            "work_tag, education_tag, religion, orientation"
-        ).in_("user_id", chunk).execute()
-        for r in (resp.data or []):
-            all_results[r["user_id"]] = r
-    return all_results
+    rows = _db_query(
+        "SELECT user_id, full_name, gender, age, height, city, area, work, education, "
+        "work_tag, education_tag, religion, orientation "
+        "FROM user_profile_data WHERE user_id = ANY(%s::uuid[])",
+        (user_ids,)
+    )
+    return {r["user_id"]: dict(r) for r in rows}
 
 
 @st.cache_data(ttl=300, show_spinner=False)
@@ -168,32 +240,20 @@ def fetch_photos_batch(user_ids_tuple):
     user_ids = list(user_ids_tuple)
     if not user_ids:
         return {}
-    sb = get_client()
 
-    all_photos = []
-    for i in range(0, len(user_ids), 50):
-        chunk = user_ids[i:i + 50]
-        resp = sb.from_("user_photos").select(
-            "user_id, url, category, position, is_display_photo"
-        ).in_("user_id", chunk).order("position", desc=False).execute()
-        all_photos.extend(resp.data or [])
+    rows = _db_query(
+        "SELECT user_id, url, category, position, is_display_photo "
+        "FROM user_photos WHERE user_id = ANY(%s::uuid[]) ORDER BY position ASC",
+        (user_ids,)
+    )
+    all_photos = [dict(r) for r in rows]
 
     if not all_photos:
         return {uid: [] for uid in user_ids}
 
-    # Batch sign all URLs
+    # Batch sign all URLs via GCS
     all_paths = [p["url"] for p in all_photos if p.get("url")]
-    signed_map = {}
-    if all_paths:
-        try:
-            signed_results = sb.storage.from_("media").create_signed_urls(all_paths, SIGNED_URL_EXPIRY)
-            for item in signed_results:
-                path = item.get("path", "")
-                url = item.get("signedURL") or item.get("signedUrl", "")
-                if path:
-                    signed_map[path] = url
-        except Exception:
-            pass
+    signed_map = _gcs_sign_urls_batch(all_paths)
 
     for p in all_photos:
         p["signed_url"] = signed_map.get(p.get("url", ""), "")
@@ -339,15 +399,9 @@ def sign_storage_paths(paths):
     """Sign a list of storage paths and return {path: signed_url}."""
     if not paths:
         return {}
-    sb = get_client()
     signed_map = {}
     try:
-        results = sb.storage.from_("media").create_signed_urls(paths, SIGNED_URL_EXPIRY)
-        for idx, item in enumerate(results):
-            p = item.get("path", "") or (paths[idx] if idx < len(paths) else "")
-            url = item.get("signedURL") or item.get("signedUrl") or item.get("signed_url", "")
-            if p and url:
-                signed_map[p] = url
+        signed_map = _gcs_sign_urls_batch(paths)
     except Exception as e:
         st.warning(f"Failed to sign storage paths: {e}")
     return signed_map
@@ -467,6 +521,7 @@ raw = json.loads(uploaded_file.read())
 all_matches, run_stats = parse_matches_json(raw)
 display_lookup = parse_display_metadata(raw)
 why_you_two_lookup = parse_why_you_two(raw)
+match_lookup = {tuple(sorted([m["user_a"], m["user_b"]])): m for m in all_matches}
 
 # --- Sidebar filters ---
 st.sidebar.markdown("### Filters")
@@ -561,12 +616,15 @@ if not phase_counts:
         p = m.get("origin_phase", "unknown")
         phase_counts[p] = phase_counts.get(p, 0) + 1
 
-stats_cols = st.columns(min(len(phase_counts) + 1, 6))
+unique_users = set(uid for m in all_matches for uid in [m["user_a"], m["user_b"]])
+stats_cols = st.columns(min(len(phase_counts) + 2, 7))
 with stats_cols[0]:
     st.metric("Total Pairs", run_stats.get("total_pairs", total))
+with stats_cols[1]:
+    st.metric("Unique Users", len(unique_users))
 for i, (phase, count) in enumerate(sorted(phase_counts.items())):
-    if i + 1 < len(stats_cols):
-        with stats_cols[i + 1]:
+    if i + 2 < len(stats_cols):
+        with stats_cols[i + 2]:
             st.metric(phase, count)
 
 if total == 0:
@@ -687,14 +745,14 @@ with tab_review:
                 with c1:
                     if st.button("Yes, reject", key=f"btn_yes_{match_key}", type="primary", use_container_width=True):
                         try:
-                            sb = get_client()
-                            expires = (datetime.now(timezone.utc) + timedelta(weeks=1)).isoformat()
-                            sb.rpc("upsert_match_cooldown", {
-                                "p_user_a": user_a,
-                                "p_user_b": user_b,
-                                "p_type": "manual_rejection",
-                                "p_expires_at": expires,
-                            }).execute()
+                            sorted_pair = sorted([user_a, user_b])
+                            expires = datetime.now(timezone.utc) + timedelta(weeks=1)
+                            _db_execute(
+                                'INSERT INTO match_cooldowns (user_a_id, user_b_id, "type", expires_at) '
+                                "VALUES (%s, %s, %s, %s) "
+                                'ON CONFLICT (user_a_id, user_b_id, "type") DO UPDATE SET expires_at = EXCLUDED.expires_at',
+                                (sorted_pair[0], sorted_pair[1], "manual_rejection", expires)
+                            )
                             st.session_state.pop(reject_key, None)
                             st.session_state[rejected_key] = True
                             st.rerun()
@@ -718,6 +776,44 @@ with tab_review:
         if not is_rejected:
             if st.button("Reject Match", key=f"btn_reject_{match_key}_bottom", type="primary", use_container_width=True):
                 st.session_state[reject_key] = True
+
+        # Inline display data preview if available
+        pair_key_dd = tuple(sorted([user_a, user_b]))
+        dd_sample = display_lookup.get(pair_key_dd)
+        if dd_sample:
+            with st.expander("View Display Data", expanded=False):
+                # Collect and sign paths for this pair
+                dd_paths = []
+                for dd_key in ("display_data_of_user_1", "display_data_of_user_2"):
+                    for section in dd_sample.get(dd_key, []):
+                        if section.get("type") == "display_picture":
+                            dd_paths.append(section.get("content", ""))
+                        elif section.get("type") == "photos":
+                            for p in (section.get("content", []) if isinstance(section.get("content"), list) else []):
+                                dd_paths.append(p.get("path", ""))
+                dd_paths = [p for p in dd_paths if p]
+                dd_signed = sign_storage_paths(dd_paths)
+
+                dd_name_1 = profiles.get(dd_sample.get("user_1_id", ""), {}).get("full_name") or dd_sample.get("user_1_id", "")[:8]
+                dd_name_2 = profiles.get(dd_sample.get("user_2_id", ""), {}).get("full_name") or dd_sample.get("user_2_id", "")[:8]
+
+                dd_col1, dd_col2 = st.columns(2)
+                with dd_col1:
+                    st.markdown(
+                        f'<p style="color:#6366f1; font-weight:700; font-size:15px; margin-bottom:8px;">'
+                        f'What {dd_name_1} sees about {dd_name_2}</p>',
+                        unsafe_allow_html=True,
+                    )
+                    for section in sorted(dd_sample.get("display_data_of_user_1", []), key=lambda x: x.get("order", 0)):
+                        render_display_section(section, dd_signed)
+                with dd_col2:
+                    st.markdown(
+                        f'<p style="color:#ec4899; font-weight:700; font-size:15px; margin-bottom:8px;">'
+                        f'What {dd_name_2} sees about {dd_name_1}</p>',
+                        unsafe_allow_html=True,
+                    )
+                    for section in sorted(dd_sample.get("display_data_of_user_2", []), key=lambda x: x.get("order", 0)):
+                        render_display_section(section, dd_signed)
 
     st.markdown("---")
     render_pagination("bottom")
@@ -839,6 +935,59 @@ with tab_display:
                                     key=lambda x: x.get("order", 0))
                 for section in sections_2:
                     render_display_section(section, display_signed_urls)
+
+            # Inline match review if available
+            dd_pair_key = tuple(sorted([u1, u2]))
+            dd_match = match_lookup.get(dd_pair_key)
+            if dd_match:
+                with st.expander("View Match Review", expanded=False):
+                    dd_ua = dd_match["user_a"]
+                    dd_ub = dd_match["user_b"]
+                    dd_score = dd_match.get("mutual_score") or 0
+                    dd_phase = dd_match.get("origin_phase", "?")
+                    dd_method = dd_match.get("origin_method", "?")
+
+                    st.markdown(
+                        f'Score: **{round(dd_score, 4)}** &nbsp; {origin_badge(dd_phase)} &nbsp; Method: **{dd_method}**',
+                        unsafe_allow_html=True,
+                    )
+                    mr_cols = st.columns(4)
+                    with mr_cols[0]:
+                        st.caption(f"Mutual: **{round(dd_score, 4)}**")
+                    with mr_cols[1]:
+                        a_s = dd_match.get("a_scores_b")
+                        st.caption(f"A→B: **{round(a_s, 4) if a_s is not None else 'N/A'}**")
+                    with mr_cols[2]:
+                        b_s = dd_match.get("b_scores_a")
+                        st.caption(f"B→A: **{round(b_s, 4) if b_s is not None else 'N/A'}**")
+                    with mr_cols[3]:
+                        st.caption(f"Rank: **{dd_match.get('rank', '?')}**")
+
+                    # Why You Two
+                    dd_wyt = why_you_two_lookup.get(dd_pair_key)
+                    if dd_wyt and dd_wyt.get("success") and dd_wyt.get("why_you_two"):
+                        wyt_c = dd_wyt["why_you_two"].get("content", "")
+                        if wyt_c:
+                            st.markdown(
+                                f'<div style="background:linear-gradient(135deg, #6366f1 0%, #ec4899 100%); border-radius:12px; padding:14px 20px; margin:8px 0;">'
+                                f'<p style="color:rgba(255,255,255,0.7); font-size:11px; text-transform:uppercase; letter-spacing:1px; margin:0 0 4px 0;">Why You Two</p>'
+                                f'<p style="color:#ffffff; font-size:15px; font-weight:500; line-height:1.5; margin:0;">{wyt_c}</p>'
+                                f'</div>',
+                                unsafe_allow_html=True,
+                            )
+
+                    # Profiles + photos
+                    mr_ids = [dd_ua, dd_ub]
+                    mr_profiles, mr_photos, mr_ai, mr_mm = fetch_page_data(mr_ids)
+                    mr_col_a, mr_col_b = st.columns(2)
+                    with mr_col_a:
+                        st.markdown("**User A**")
+                        render_user_card(mr_profiles.get(dd_ua, {}), mr_photos.get(dd_ua, []), 60,
+                                         mr_ai.get(dd_ua), mr_mm.get(dd_ua))
+                    with mr_col_b:
+                        st.markdown("**User B**")
+                        render_user_card(mr_profiles.get(dd_ub, {}), mr_photos.get(dd_ub, []), 60,
+                                         mr_ai.get(dd_ub), mr_mm.get(dd_ub))
 
         st.markdown("---")
         render_dd_pagination("bottom")
