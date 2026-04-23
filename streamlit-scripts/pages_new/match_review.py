@@ -105,53 +105,32 @@ def _db_execute(sql, params=None):
 
 def parse_matches_json(data):
     """
-    Parse uploaded mutual_matches JSON into deduplicated unique pairs.
+    Parse uploaded mutual_matches JSON into one row per (viewer, matched_user_id) entry.
+    Viewer (key of matches_by_user) is ALWAYS rendered on the left in the UI.
     JSON format: { matches_by_user: { user_id: [ {matched_user_id, rank, mutual_score, ...} ] }, stats: {...} }
     """
     matches_by_user = data.get("matches_by_user", {})
     stats = data.get("stats", {})
 
-    seen_pairs = set()
-    unique_pairs = []
-
+    rows = []
     for user_id, matches in matches_by_user.items():
         for m in matches:
             matched_id = m["matched_user_id"]
-            pair_key = tuple(sorted([user_id, matched_id]))
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
+            rows.append({
+                "viewer": user_id,
+                "candidate": matched_id,
+                "mutual_score": m.get("mutual_score", 0),
+                "viewer_scores_candidate": m.get("viewer_scores_candidate"),
+                "candidate_scores_viewer": m.get("candidate_scores_viewer"),
+                "rank": m.get("rank"),
+                "origin_phase": m.get("origin_phase", "?"),
+                "origin_method": m.get("origin_method", "?"),
+                "origin_metadata": m.get("origin_metadata"),
+                "is_mutual": m.get("is_mutual"),
+            })
 
-            # Normalize: user_a is the one from pair_key[0]
-            if user_id == pair_key[0]:
-                unique_pairs.append({
-                    "user_a": user_id,
-                    "user_b": matched_id,
-                    "mutual_score": m.get("mutual_score", 0),
-                    "a_scores_b": m.get("viewer_scores_candidate"),
-                    "b_scores_a": m.get("candidate_scores_viewer"),
-                    "rank": m.get("rank"),
-                    "origin_phase": m.get("origin_phase", "?"),
-                    "origin_method": m.get("origin_method", "?"),
-                    "origin_metadata": m.get("origin_metadata"),
-                    "is_mutual": m.get("is_mutual"),
-                })
-            else:
-                unique_pairs.append({
-                    "user_a": matched_id,
-                    "user_b": user_id,
-                    "mutual_score": m.get("mutual_score", 0),
-                    "a_scores_b": m.get("candidate_scores_viewer"),
-                    "b_scores_a": m.get("viewer_scores_candidate"),
-                    "rank": m.get("rank"),
-                    "origin_phase": m.get("origin_phase", "?"),
-                    "origin_method": m.get("origin_method", "?"),
-                    "origin_metadata": m.get("origin_metadata"),
-                    "is_mutual": m.get("is_mutual"),
-                })
-
-    unique_pairs.sort(key=lambda x: x.get("mutual_score") or 0, reverse=True)
-    return unique_pairs, stats
+    rows.sort(key=lambda x: x.get("mutual_score") or 0, reverse=True)
+    return rows, stats
 
 
 # =========== SUPABASE FETCHERS (profiles + photos) ===========
@@ -521,7 +500,7 @@ raw = json.loads(uploaded_file.read())
 all_matches, run_stats = parse_matches_json(raw)
 display_lookup = parse_display_metadata(raw)
 why_you_two_lookup = parse_why_you_two(raw)
-match_lookup = {tuple(sorted([m["user_a"], m["user_b"]])): m for m in all_matches}
+match_lookup = {tuple(sorted([m["viewer"], m["candidate"]])): m for m in all_matches}
 
 # --- Sidebar filters ---
 st.sidebar.markdown("### Filters")
@@ -540,10 +519,10 @@ available_phases = sorted(set(m["origin_phase"] for m in all_matches))
 phase_filter = st.sidebar.selectbox("Origin Phase", ["All"] + available_phases)
 
 # Gender sort — detect available genders from data
-_all_uids_for_gender = list(set(uid for m in all_matches for uid in [m["user_a"], m["user_b"]]))
+_all_uids_for_gender = list(set(uid for m in all_matches for uid in [m["viewer"], m["candidate"]]))
 _gender_map_preview = fetch_genders_batch(tuple(sorted(_all_uids_for_gender)))
 _available_genders = sorted(set(_gender_map_preview.values()) - {"unknown"})
-gender_sort = st.sidebar.selectbox("Group by Gender", ["None"] + _available_genders)
+gender_sort = st.sidebar.selectbox("Group by Gender (viewer)", ["None"] + _available_genders)
 
 # Photo scale
 photo_scale = st.sidebar.slider("Photo Size (%)", min_value=20, max_value=100, value=60, step=10,
@@ -568,43 +547,50 @@ st.sidebar.markdown(f"**Zero matches:** {run_stats.get('users_with_zero', '?')}"
 if phase_filter != "All":
     all_matches = [m for m in all_matches if m["origin_phase"] == phase_filter]
 
-# Apply user_id search — show only matches listed under that user in matches_by_user
+# Apply user_id search — show only rows where the searched user is the VIEWER
+# (since the viewer is always pinned on the left, this is exactly "that user's perspective")
 if search_user_id:
     search_term = search_user_id.strip()
-    user_matched_ids = set()
-    for m in (raw.get("matches_by_user", {}).get(search_term, [])):
-        user_matched_ids.add(m["matched_user_id"])
-    if user_matched_ids:
-        all_matches = [m for m in all_matches
-                       if (m["user_a"] == search_term and m["user_b"] in user_matched_ids)
-                       or (m["user_b"] == search_term and m["user_a"] in user_matched_ids)]
-    else:
-        all_matches = []
+    all_matches = [m for m in all_matches if m["viewer"] == search_term]
 
-# Apply gender grouping
+# Top-of-page viewer-gender filter (set below, before tabs) — defaults to None
+# We'll apply it after we render the top filter bar so total reflects the filter.
+
+# Apply gender grouping (by viewer gender — viewer is always on the left)
 if gender_sort != "None":
     gender_map = _gender_map_preview
-
-    # For each match, find the user(s) matching the selected gender
-    # Group: { user_id -> [matches] } for users of the selected gender
     grouped = OrderedDict()
     ungrouped = []
     for m in all_matches:
-        a_gender = gender_map.get(m["user_a"], "unknown")
-        b_gender = gender_map.get(m["user_b"], "unknown")
-        if a_gender == gender_sort:
-            grouped.setdefault(m["user_a"], []).append(m)
-        elif b_gender == gender_sort:
-            grouped.setdefault(m["user_b"], []).append(m)
+        v_gender = gender_map.get(m["viewer"], "unknown")
+        if v_gender == gender_sort:
+            grouped.setdefault(m["viewer"], []).append(m)
         else:
             ungrouped.append(m)
 
-    # Rebuild all_matches: each group's matches sorted by score, then ungrouped at the end
     all_matches = []
     for uid, matches in grouped.items():
         matches.sort(key=lambda x: x.get("mutual_score") or 0, reverse=True)
         all_matches.extend(matches)
     all_matches.extend(ungrouped)
+
+# --- Top-of-page "Viewer Gender" filter ---
+# Shows only rows where the viewer (left side) is of the chosen gender.
+_top_filter_cols = st.columns([2, 3, 2])
+with _top_filter_cols[1]:
+    viewer_gender_filter = st.radio(
+        "Viewer gender (left side)",
+        ["All"] + _available_genders,
+        horizontal=True,
+        key="mr_viewer_gender_filter",
+        help="Filter to only rows where the viewer (left side) is this gender.",
+    )
+
+if viewer_gender_filter != "All":
+    all_matches = [
+        m for m in all_matches
+        if _gender_map_preview.get(m["viewer"]) == viewer_gender_filter
+    ]
 
 total = len(all_matches)
 
@@ -616,7 +602,7 @@ if not phase_counts:
         p = m.get("origin_phase", "unknown")
         phase_counts[p] = phase_counts.get(p, 0) + 1
 
-unique_users = set(uid for m in all_matches for uid in [m["user_a"], m["user_b"]])
+unique_users = set(uid for m in all_matches for uid in [m["viewer"], m["candidate"]])
 stats_cols = st.columns(min(len(phase_counts) + 2, 7))
 with stats_cols[0]:
     st.metric("Total Pairs", run_stats.get("total_pairs", total))
@@ -670,27 +656,30 @@ with tab_review:
     page_matches = all_matches[start:start + MATCHES_PER_PAGE]
 
     page_user_ids = list(set(
-        uid for m in page_matches for uid in [m["user_a"], m["user_b"]]
+        uid for m in page_matches for uid in [m["viewer"], m["candidate"]]
     ))
 
     with st.spinner("Loading profiles & photos..."):
         profiles, photos, ai_states, mm_states = fetch_page_data(page_user_ids)
 
     for idx, match in enumerate(page_matches):
-        user_a = match["user_a"]
-        user_b = match["user_b"]
+        viewer = match["viewer"]
+        candidate = match["candidate"]
         score = match.get("mutual_score") or 0
         phase = match.get("origin_phase", "?")
         method = match.get("origin_method", "?")
 
-        profile_a = profiles.get(user_a, {})
-        profile_b = profiles.get(user_b, {})
-        name_a = profile_a.get("full_name") or "?"
-        name_b = profile_b.get("full_name") or "?"
+        # Viewer (matches_by_user key) is ALWAYS on the left; candidate on the right.
+        left_profile = profiles.get(viewer, {})
+        right_profile = profiles.get(candidate, {})
+        left_name = left_profile.get("full_name") or "?"
+        right_name = right_profile.get("full_name") or "?"
+        left_to_right_score = match.get("viewer_scores_candidate")
+        right_to_left_score = match.get("candidate_scores_viewer")
 
         st.markdown("---")
         st.markdown(
-            f"##### Match #{start + idx + 1}: {name_a} & {name_b} &nbsp;&nbsp; "
+            f"##### Match #{start + idx + 1}: {left_name} → {right_name} &nbsp;&nbsp; "
             f'<span style="font-size:14px;">Score: <b>{round(score, 4)}</b></span> &nbsp; '
             f'{origin_badge(phase)}',
             unsafe_allow_html=True,
@@ -700,11 +689,9 @@ with tab_review:
         with meta_cols[0]:
             st.caption(f"Mutual: **{round(score, 4)}**")
         with meta_cols[1]:
-            a_score = match.get("a_scores_b")
-            st.caption(f"A→B: **{round(a_score, 4) if a_score is not None else 'N/A'}**")
+            st.caption(f"Viewer→Candidate: **{round(left_to_right_score, 4) if left_to_right_score is not None else 'N/A'}**")
         with meta_cols[2]:
-            b_score = match.get("b_scores_a")
-            st.caption(f"B→A: **{round(b_score, 4) if b_score is not None else 'N/A'}**")
+            st.caption(f"Candidate→Viewer: **{round(right_to_left_score, 4) if right_to_left_score is not None else 'N/A'}**")
         with meta_cols[3]:
             st.caption(f"Rank: **{match.get('rank', '?')}**")
         with meta_cols[4]:
@@ -715,7 +702,7 @@ with tab_review:
                 st.json(match["origin_metadata"])
 
         # Why You Two
-        pair_key = tuple(sorted([user_a, user_b]))
+        pair_key = tuple(sorted([viewer, candidate]))
         wyt = why_you_two_lookup.get(pair_key)
         if wyt and wyt.get("success") and wyt.get("why_you_two"):
             wyt_content = wyt["why_you_two"].get("content", "")
@@ -728,7 +715,7 @@ with tab_review:
                     unsafe_allow_html=True,
                 )
 
-        match_key = f"{user_a}_{user_b}"
+        match_key = f"{viewer}_{candidate}"
         reject_key = f"reject_{match_key}"
         rejected_key = f"rejected_{match_key}"
         is_rejected = match.get("rejected") or st.session_state.get(rejected_key)
@@ -740,12 +727,12 @@ with tab_review:
                 st.session_state[reject_key] = True
 
             if st.session_state.get(reject_key):
-                st.warning(f"**Reject {name_a} & {name_b}?** This will add a 1-week cooldown.")
+                st.warning(f"**Reject {left_name} & {right_name}?** This will add a 1-week cooldown.")
                 c1, c2 = st.columns(2)
                 with c1:
                     if st.button("Yes, reject", key=f"btn_yes_{match_key}", type="primary", use_container_width=True):
                         try:
-                            sorted_pair = sorted([user_a, user_b])
+                            sorted_pair = sorted([viewer, candidate])
                             expires = datetime.now(timezone.utc) + timedelta(weeks=1)
                             _db_execute(
                                 'INSERT INTO match_cooldowns (user_a_id, user_b_id, "type", expires_at) '
@@ -765,20 +752,20 @@ with tab_review:
 
         col_a, col_b = st.columns(2)
         with col_a:
-            st.markdown("**User A**")
-            render_user_card(profile_a, photos.get(user_a, []), photo_scale,
-                             ai_states.get(user_a), mm_states.get(user_a))
+            st.markdown("**Viewer** _(matches_by_user key)_")
+            render_user_card(left_profile, photos.get(viewer, []), photo_scale,
+                             ai_states.get(viewer), mm_states.get(viewer))
         with col_b:
-            st.markdown("**User B**")
-            render_user_card(profile_b, photos.get(user_b, []), photo_scale,
-                             ai_states.get(user_b), mm_states.get(user_b))
+            st.markdown("**Candidate** _(matched_user_id)_")
+            render_user_card(right_profile, photos.get(candidate, []), photo_scale,
+                             ai_states.get(candidate), mm_states.get(candidate))
 
         if not is_rejected:
             if st.button("Reject Match", key=f"btn_reject_{match_key}_bottom", type="primary", use_container_width=True):
                 st.session_state[reject_key] = True
 
         # Inline display data preview if available
-        pair_key_dd = tuple(sorted([user_a, user_b]))
+        pair_key_dd = tuple(sorted([viewer, candidate]))
         dd_sample = display_lookup.get(pair_key_dd)
         if dd_sample:
             with st.expander("View Display Data", expanded=False):
@@ -941,8 +928,8 @@ with tab_display:
             dd_match = match_lookup.get(dd_pair_key)
             if dd_match:
                 with st.expander("View Match Review", expanded=False):
-                    dd_ua = dd_match["user_a"]
-                    dd_ub = dd_match["user_b"]
+                    dd_viewer = dd_match["viewer"]
+                    dd_candidate = dd_match["candidate"]
                     dd_score = dd_match.get("mutual_score") or 0
                     dd_phase = dd_match.get("origin_phase", "?")
                     dd_method = dd_match.get("origin_method", "?")
@@ -955,11 +942,11 @@ with tab_display:
                     with mr_cols[0]:
                         st.caption(f"Mutual: **{round(dd_score, 4)}**")
                     with mr_cols[1]:
-                        a_s = dd_match.get("a_scores_b")
-                        st.caption(f"A→B: **{round(a_s, 4) if a_s is not None else 'N/A'}**")
+                        v_s = dd_match.get("viewer_scores_candidate")
+                        st.caption(f"V→C: **{round(v_s, 4) if v_s is not None else 'N/A'}**")
                     with mr_cols[2]:
-                        b_s = dd_match.get("b_scores_a")
-                        st.caption(f"B→A: **{round(b_s, 4) if b_s is not None else 'N/A'}**")
+                        c_s = dd_match.get("candidate_scores_viewer")
+                        st.caption(f"C→V: **{round(c_s, 4) if c_s is not None else 'N/A'}**")
                     with mr_cols[3]:
                         st.caption(f"Rank: **{dd_match.get('rank', '?')}**")
 
@@ -977,17 +964,17 @@ with tab_display:
                             )
 
                     # Profiles + photos
-                    mr_ids = [dd_ua, dd_ub]
+                    mr_ids = [dd_viewer, dd_candidate]
                     mr_profiles, mr_photos, mr_ai, mr_mm = fetch_page_data(mr_ids)
                     mr_col_a, mr_col_b = st.columns(2)
                     with mr_col_a:
-                        st.markdown("**User A**")
-                        render_user_card(mr_profiles.get(dd_ua, {}), mr_photos.get(dd_ua, []), 60,
-                                         mr_ai.get(dd_ua), mr_mm.get(dd_ua))
+                        st.markdown("**Viewer**")
+                        render_user_card(mr_profiles.get(dd_viewer, {}), mr_photos.get(dd_viewer, []), 60,
+                                         mr_ai.get(dd_viewer), mr_mm.get(dd_viewer))
                     with mr_col_b:
-                        st.markdown("**User B**")
-                        render_user_card(mr_profiles.get(dd_ub, {}), mr_photos.get(dd_ub, []), 60,
-                                         mr_ai.get(dd_ub), mr_mm.get(dd_ub))
+                        st.markdown("**Candidate**")
+                        render_user_card(mr_profiles.get(dd_candidate, {}), mr_photos.get(dd_candidate, []), 60,
+                                         mr_ai.get(dd_candidate), mr_mm.get(dd_candidate))
 
         st.markdown("---")
         render_dd_pagination("bottom")
