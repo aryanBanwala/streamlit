@@ -17,16 +17,25 @@ from datetime import datetime, time, timedelta, timezone
 import pandas as pd
 import requests
 import streamlit as st
+from dotenv import load_dotenv
 
 
-# --- API helper ---
-INSTANT_MATCH_API_URL = "https://fastapi.heywavelength.com/api/v1/instant-match/inspect"
-INSTANT_MATCH_API_KEY = os.getenv("INSTANT_MATCH_API_KEY", "randomshitgo")
+# --- Env ---
+_current_dir = os.path.dirname(__file__)
+_repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
+load_dotenv(os.path.join(_repo_root, ".env"))
+
+INSTANT_MATCH_API_URL = os.getenv("INSTANT_MATCH_API_URL", "")
+INSTANT_MATCH_API_KEY = os.getenv("INSTANT_MATCH_API_KEY", "")
 IST = timezone(timedelta(hours=5, minutes=30))
 
 
 def fetch_instant_match_data(since_utc_iso: str, timeout: int = 60) -> dict:
     """POST to the inspect endpoint and return the parsed JSON payload."""
+    if not INSTANT_MATCH_API_URL or not INSTANT_MATCH_API_KEY:
+        raise RuntimeError(
+            "INSTANT_MATCH_API_URL and INSTANT_MATCH_API_KEY must be set in .env"
+        )
     resp = requests.post(
         INSTANT_MATCH_API_URL,
         headers={
@@ -108,18 +117,55 @@ st.markdown("---")
 
 
 # --- Completed / completed_empty match-count distribution ---
-# `matches` may be either:
-#   - dict: {user_id: count}  (new shape)
-#   - list: [{current_user_id: ...}, ...]  (old shape — count by current_user_id)
+# `matches` shapes seen so far:
+#   - dict of dicts: {user_id: {count, actions, viewed, unviewed}}  (current)
+#   - dict of ints:  {user_id: count}                                (older)
+#   - list:          [{current_user_id: ...}, ...]                   (oldest)
 matches_raw = payload.get("matches")
-matches_per_user: dict = {}
+matches_per_user: dict = {}            # user_id -> count
+match_info_per_user: dict = {}         # user_id -> {count, actions, viewed, unviewed}
+
 if isinstance(matches_raw, dict):
-    matches_per_user = {uid: int(n or 0) for uid, n in matches_raw.items()}
+    for uid, v in matches_raw.items():
+        if isinstance(v, dict):
+            matches_per_user[uid] = int(v.get("count") or 0)
+            match_info_per_user[uid] = {
+                "count": int(v.get("count") or 0),
+                "viewed": int(v.get("viewed") or 0),
+                "unviewed": int(v.get("unviewed") or 0),
+                "actions": v.get("actions") or {},
+            }
+        else:
+            matches_per_user[uid] = int(v or 0)
 elif isinstance(matches_raw, list):
     for m in matches_raw:
         uid = m.get("current_user_id")
         if uid:
             matches_per_user[uid] = matches_per_user.get(uid, 0) + 1
+
+
+# --- Action totals + viewed/unviewed (top-level) ---
+action_totals = payload.get("action_totals") or {}
+total_count_all = sum(matches_per_user.values()) or payload.get("total_matches") or 0
+total_viewed = sum(v.get("viewed", 0) for v in match_info_per_user.values())
+total_unviewed = sum(v.get("unviewed", 0) for v in match_info_per_user.values())
+
+if action_totals or match_info_per_user:
+    st.subheader("Match actions & view stats")
+
+    a1, a2, a3, a4 = st.columns(4)
+    a1.metric("Shortlisted", action_totals.get("shortlisted", 0))
+    a2.metric("Rejected", action_totals.get("rejected", 0))
+    a3.metric("Passed", action_totals.get("passed", 0))
+    a4.metric("No action", action_totals.get("none", 0))
+
+    v1, v2, v3 = st.columns(3)
+    v1.metric("Total matches", total_count_all)
+    v2.metric("Viewed", total_viewed)
+    v3.metric("Unviewed", total_unviewed)
+
+    st.markdown("---")
+
 
 completed_states = [
     s for s in states if s.get("status") in ("completed", "completed_empty")
@@ -129,6 +175,8 @@ dist_rows = []
 for s in completed_states:
     uid = s.get("user_id")
     n = matches_per_user.get(uid, 0)
+    info = match_info_per_user.get(uid, {})
+    actions = info.get("actions") or {}
     dist_rows.append({
         "user_id": uid,
         "status": s.get("status"),
@@ -136,6 +184,12 @@ for s in completed_states:
         "prof_tier": s.get("prof_tier"),
         "attractiveness_score": s.get("attractiveness_score"),
         "match_count": n,
+        "viewed": info.get("viewed", 0),
+        "unviewed": info.get("unviewed", 0),
+        "shortlisted": int(actions.get("shortlisted", 0)),
+        "rejected": int(actions.get("rejected", 0)),
+        "passed": int(actions.get("passed", 0)),
+        "no_action": int(actions.get("none", 0)),
     })
 
 st.subheader(f"Completed / completed_empty — matches per user")
@@ -201,11 +255,81 @@ if dist_rows:
     )
     st.dataframe(gpivot, hide_index=True, use_container_width=True)
 
-    with st.expander("Per-user table"):
+    # Actions + view stats by gender
+    st.markdown("**Actions & views by gender**")
+    action_summary = (
+        gender_df.groupby("gender")
+        .agg(
+            users=("user_id", "count"),
+            matches=("match_count", "sum"),
+            viewed=("viewed", "sum"),
+            unviewed=("unviewed", "sum"),
+            shortlisted=("shortlisted", "sum"),
+            rejected=("rejected", "sum"),
+            passed=("passed", "sum"),
+            no_action=("no_action", "sum"),
+        )
+        .reset_index()
+    )
+    st.dataframe(action_summary, hide_index=True, use_container_width=True)
+
+    with st.expander("Per-user table (completed only)"):
         st.dataframe(
-            dist_df.sort_values("match_count", ascending=False),
+            dist_df[dist_df["status"] == "completed"]
+            .drop(columns=["bucket"])
+            .sort_values("match_count", ascending=False),
             hide_index=True, use_container_width=True,
         )
+
+    # Detailed completed_empty users
+    empty_users = [s for s in completed_states if s.get("status") == "completed_empty"]
+    st.markdown(f"**`completed_empty` users — {len(empty_users)}**")
+    if empty_users:
+        def _ltm(v):
+            if v is True:
+                return "true"
+            if v is False:
+                return "false"
+            return "—"
+
+        empty_detail = pd.DataFrame([
+            {
+                "user_id": s.get("user_id"),
+                "gender": s.get("gender"),
+                "prof_tier": s.get("prof_tier"),
+                "attractiveness_score": s.get("attractiveness_score"),
+                "verification_status": s.get("verification_status"),
+                "looking_to_match": _ltm(s.get("looking_to_match")),
+                "deleted_at": s.get("deleted_at"),
+                "attempts": s.get("attempts"),
+            }
+            for s in empty_users
+        ])
+        st.dataframe(empty_detail, hide_index=True, use_container_width=True)
+        st.download_button(
+            "Download completed_empty CSV",
+            data=empty_detail.to_csv(index=False).encode(),
+            file_name="instant_matches_completed_empty.csv",
+            mime="text/csv",
+        )
+    else:
+        st.caption("No `completed_empty` users in this export.")
+
+    # completed_empty split by gender
+    st.markdown("**`completed_empty` by gender**")
+    empty_df = gender_df[gender_df["status"] == "completed_empty"]
+    if len(empty_df):
+        empty_summary = (
+            empty_df.groupby("gender")
+            .size()
+            .reset_index(name="completed_empty_users")
+        )
+        totals = gender_df.groupby("gender").size().reset_index(name="total_users")
+        empty_summary = empty_summary.merge(totals, on="gender", how="right").fillna(0)
+        empty_summary["completed_empty_users"] = empty_summary["completed_empty_users"].astype(int)
+        st.dataframe(empty_summary, hide_index=True, use_container_width=True)
+    else:
+        st.caption("No `completed_empty` users in this export.")
 else:
     st.info("No completed/completed_empty users in this export.")
 
