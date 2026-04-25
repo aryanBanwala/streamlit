@@ -114,6 +114,35 @@ if dist_rows:
     pivot = pivot[["completed", "completed_empty"]].reset_index().rename(columns={"bucket": "matches"})
     st.dataframe(pivot, hide_index=True, use_container_width=True)
 
+    # Split by gender
+    st.markdown("**By gender**")
+    gender_df = dist_df.copy()
+    gender_df["gender"] = gender_df["gender"].fillna("unknown")
+
+    # Per-gender summary: users, total matches, avg, % with 0
+    summary = (
+        gender_df.groupby("gender")
+        .agg(
+            users=("user_id", "count"),
+            total_matches=("match_count", "sum"),
+            avg_matches=("match_count", "mean"),
+            zero_match_users=("match_count", lambda x: int((x == 0).sum())),
+        )
+        .reset_index()
+    )
+    summary["avg_matches"] = summary["avg_matches"].round(2)
+    st.dataframe(summary, hide_index=True, use_container_width=True)
+
+    # Bucket pivot by gender
+    gpivot = (
+        gender_df.groupby(["bucket", "gender"]).size()
+        .unstack(fill_value=0)
+        .reindex(bucket_order, fill_value=0)
+        .reset_index()
+        .rename(columns={"bucket": "matches"})
+    )
+    st.dataframe(gpivot, hide_index=True, use_container_width=True)
+
     with st.expander("Per-user table"):
         st.dataframe(
             dist_df.sort_values("match_count", ascending=False),
