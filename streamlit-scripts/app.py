@@ -100,13 +100,13 @@ elif st.session_state.dashboard == "new":
     score_explorer_page = st.Page("pages/score_explorer.py", title="Score Explorer", icon="🔬")
     pref_photo_search_page = st.Page("pages_new/pref_photo_search.py", title="Pref → Photo Search", icon="🔎")
     user_reco_action_page = st.Page("pages_new/user_reco_action_viewer.py", title="User Reco Action Viewer", icon="👤")
-    ims_analytics_page = st.Page("pages_new/ims_analytics.py", title="IMS Analytics", icon="📉")
+    instant_matches_analytics_page = st.Page("pages_new/instant_matches_analytics.py", title="Instant Matches Analytics", icon="📉")
 
     pg = st.navigation(
         {
             "📱 New Dashboard": [new_home_page],
             "Review": [quality_filtering_page, match_review_page, match_compare_page, wyt_checker_page],
-            "Analytics": [score_explorer_page, pref_photo_search_page, user_reco_action_page, ims_analytics_page],
+            "Analytics": [score_explorer_page, pref_photo_search_page, user_reco_action_page, instant_matches_analytics_page],
         }
     )
     pg.run()
