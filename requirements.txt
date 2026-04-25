@@ -5,3 +5,5 @@ pinecone
 openai
 python-dotenv
 plotly
+psycopg2-binary
+google-cloud-storage
