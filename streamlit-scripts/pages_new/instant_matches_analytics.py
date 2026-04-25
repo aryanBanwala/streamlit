@@ -1,6 +1,7 @@
 """
-IMS Analytics
-Upload a states-table JSON export and analyse why users were marked `skipped`.
+Instant Matches Analytics
+Fetch (or upload) a states-table JSON export and analyse why users were marked
+`skipped`.
 
 For each skipped user we read the LAST record in `error_history` and surface a
 reason:
@@ -10,21 +11,78 @@ reason:
   - Otherwise show the error name + any `ineligibility_reasons` from metadata.
 """
 import json
-import streamlit as st
+import os
+from datetime import datetime, time, timedelta, timezone
+
 import pandas as pd
+import requests
+import streamlit as st
 
-st.title("IMS Analytics")
-st.caption("Upload the states JSON and see why skipped users got skipped.")
 
-uploaded = st.file_uploader("Upload states JSON", type=["json"])
-if not uploaded:
-    st.info("Upload a JSON with top-level `states: [...]` to begin.")
-    st.stop()
+# --- API helper ---
+INSTANT_MATCH_API_URL = "https://fastapi.heywavelength.com/api/v1/instant-match/inspect"
+INSTANT_MATCH_API_KEY = os.getenv("INSTANT_MATCH_API_KEY", "randomshitgo")
+IST = timezone(timedelta(hours=5, minutes=30))
 
-try:
-    payload = json.load(uploaded)
-except Exception as e:
-    st.error(f"Failed to parse JSON: {e}")
+
+def fetch_instant_match_data(since_utc_iso: str, timeout: int = 60) -> dict:
+    """POST to the inspect endpoint and return the parsed JSON payload."""
+    resp = requests.post(
+        INSTANT_MATCH_API_URL,
+        headers={
+            "x-api-key": INSTANT_MATCH_API_KEY,
+            "content-type": "application/json",
+        },
+        json={"since": since_utc_iso},
+        timeout=timeout,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def ist_to_utc_iso(d, t) -> str:
+    """Combine an IST date+time and emit `YYYY-MM-DDTHH:MM:SSZ`."""
+    dt_ist = datetime.combine(d, t).replace(tzinfo=IST)
+    dt_utc = dt_ist.astimezone(timezone.utc)
+    return dt_utc.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+st.title("Instant Matches Analytics")
+st.caption("Fetch from the API or upload a states JSON, then see why skipped users got skipped.")
+
+# --- Source selector ---
+tab_fetch, tab_upload = st.tabs(["Fetch from API", "Upload JSON"])
+
+with tab_fetch:
+    col_d, col_t = st.columns(2)
+    default_dt = datetime.now(IST) - timedelta(hours=24)
+    since_date = col_d.date_input("Since (IST date)", value=default_dt.date(), key="im_since_date")
+    since_time = col_t.time_input("Since (IST time)", value=time(0, 0), key="im_since_time")
+    since_utc = ist_to_utc_iso(since_date, since_time)
+    st.caption(f"Will send `since`: `{since_utc}` (UTC)")
+
+    if st.button("Fetch data", type="primary"):
+        try:
+            with st.spinner("Calling instant-match inspect API…"):
+                st.session_state["im_payload"] = fetch_instant_match_data(since_utc)
+            st.success("Fetched.")
+        except requests.HTTPError as e:
+            st.error(f"HTTP {e.response.status_code}: {e.response.text[:500]}")
+        except Exception as e:
+            st.error(f"Fetch failed: {e}")
+
+with tab_upload:
+    uploaded = st.file_uploader("Upload states JSON", type=["json"])
+    if uploaded is not None:
+        try:
+            st.session_state["im_payload"] = json.load(uploaded)
+            st.success("Loaded uploaded JSON.")
+        except Exception as e:
+            st.error(f"Failed to parse JSON: {e}")
+
+payload = st.session_state.get("im_payload")
+if not payload:
+    st.info("Fetch from the API or upload a JSON with top-level `states: [...]` to begin.")
     st.stop()
 
 states = payload.get("states") or []
@@ -244,6 +302,6 @@ st.dataframe(
 st.download_button(
     "Download analysis CSV",
     data=view.to_csv(index=False).encode(),
-    file_name="ims_skipped_analysis.csv",
+    file_name="instant_matches_skipped_analysis.csv",
     mime="text/csv",
 )
