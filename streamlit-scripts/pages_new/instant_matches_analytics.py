@@ -213,19 +213,6 @@ if dist_rows:
     st.dataframe(overall, hide_index=True, use_container_width=True)
     st.bar_chart(overall.set_index("matches")["users"])
 
-    # Split by status
-    st.markdown("**By status**")
-    pivot = (
-        dist_df.groupby(["bucket", "status"]).size()
-        .unstack(fill_value=0)
-        .reindex(bucket_order, fill_value=0)
-    )
-    for col in ("completed", "completed_empty"):
-        if col not in pivot.columns:
-            pivot[col] = 0
-    pivot = pivot[["completed", "completed_empty"]].reset_index().rename(columns={"bucket": "matches"})
-    st.dataframe(pivot, hide_index=True, use_container_width=True)
-
     # Split by gender
     st.markdown("**By gender**")
     gender_df = dist_df.copy()
@@ -272,6 +259,20 @@ if dist_rows:
         .reset_index()
     )
     st.dataframe(action_summary, hide_index=True, use_container_width=True)
+
+    # User-level engagement by gender (only users who actually got matches)
+    st.markdown("**User engagement by gender** (denominator = users with ≥1 match)")
+    eligible = gender_df[gender_df["match_count"] > 0]
+    engagement = (
+        eligible.groupby("gender")
+        .agg(
+            users_with_matches=("user_id", "count"),
+            viewed_atleast_one=("viewed", lambda x: int((x >= 1).sum())),
+            shortlisted_atleast_one=("shortlisted", lambda x: int((x >= 1).sum())),
+        )
+        .reset_index()
+    )
+    st.dataframe(engagement, hide_index=True, use_container_width=True)
 
     with st.expander("Per-user table (completed only)"):
         st.dataframe(
