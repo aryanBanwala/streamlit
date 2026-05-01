@@ -119,8 +119,21 @@ st.markdown("---")
 # --- Completed / completed_empty match-count distribution ---
 # `matches` shapes seen so far:
 #   - dict of dicts: {user_id: {count, actions, viewed, unviewed}}  (current)
+#     where actions = {action_name: [matched_user_ids]} OR {action_name: count}
 #   - dict of ints:  {user_id: count}                                (older)
 #   - list:          [{current_user_id: ...}, ...]                   (oldest)
+def _action_count(v):
+    """Return a count for an action value that might be a list of ids or an int."""
+    if v is None:
+        return 0
+    if isinstance(v, list):
+        return len(v)
+    try:
+        return int(v)
+    except (TypeError, ValueError):
+        return 0
+
+
 matches_raw = payload.get("matches")
 matches_per_user: dict = {}            # user_id -> count
 match_info_per_user: dict = {}         # user_id -> {count, actions, viewed, unviewed}
@@ -186,10 +199,10 @@ for s in completed_states:
         "match_count": n,
         "viewed": info.get("viewed", 0),
         "unviewed": info.get("unviewed", 0),
-        "shortlisted": int(actions.get("shortlisted", 0)),
-        "rejected": int(actions.get("rejected", 0)),
-        "passed": int(actions.get("passed", 0)),
-        "no_action": int(actions.get("none", 0)),
+        "shortlisted": _action_count(actions.get("shortlisted")),
+        "rejected": _action_count(actions.get("rejected")),
+        "passed": _action_count(actions.get("passed")),
+        "no_action": _action_count(actions.get("none")),
     })
 
 st.subheader(f"Completed / completed_empty — matches per user")
@@ -430,3 +443,115 @@ st.download_button(
     file_name="instant_matches_skipped_analysis.csv",
     mime="text/csv",
 )
+
+
+# =====================================================================
+# Match Action Demographics
+# Look at who got shortlisted/rejected/passed/none, broken down by the
+# matched user's tier / attractiveness / gender.
+# Uses: payload.matches[viewer_id].actions = {action: [matched_user_ids]}
+#       payload.matched_users[user_id]    = {prof_tier, attractiveness_score, gender}
+# =====================================================================
+st.markdown("---")
+st.header("Match action demographics")
+
+matched_users = payload.get("matched_users") or {}
+viewer_info = {s.get("user_id"): s for s in states}
+
+action_rows = []
+for viewer_id, m in (payload.get("matches") or {}).items():
+    if not isinstance(m, dict):
+        continue
+    actions = m.get("actions") or {}
+    viewer = viewer_info.get(viewer_id, {}) or {}
+    for action_name, matched_ids in actions.items():
+        # New schema: {action: [user_ids]}.  Older shape was {action: count}.
+        if not isinstance(matched_ids, list):
+            continue
+        for mid in matched_ids:
+            mu = matched_users.get(mid, {}) or {}
+            action_rows.append({
+                "viewer_id": viewer_id,
+                "viewer_gender": viewer.get("gender"),
+                "viewer_tier": viewer.get("prof_tier"),
+                "viewer_attr": viewer.get("attractiveness_score"),
+                "action": action_name,
+                "matched_user_id": mid,
+                "matched_gender": mu.get("gender"),
+                "matched_tier": mu.get("prof_tier"),
+                "matched_attr": mu.get("attractiveness_score"),
+            })
+
+if not action_rows:
+    st.info("No per-match action data found (matches[].actions must be lists of user_ids).")
+else:
+    a_df = pd.DataFrame(action_rows)
+
+    # --- Filters ---
+    fc1, fc2 = st.columns(2)
+    viewer_genders = ["all"] + sorted(g for g in a_df["viewer_gender"].dropna().unique())
+    vg = fc1.selectbox("Viewer gender", viewer_genders, key="ad_viewer_gender")
+    all_actions = sorted(a_df["action"].unique())
+    chosen_actions = fc2.multiselect("Actions", all_actions, default=all_actions, key="ad_actions")
+
+    f_df = a_df.copy()
+    if vg != "all":
+        f_df = f_df[f_df["viewer_gender"] == vg]
+    if chosen_actions:
+        f_df = f_df[f_df["action"].isin(chosen_actions)]
+
+    st.caption(f"Filtered rows: **{len(f_df)}**")
+
+    if f_df.empty:
+        st.info("No rows after filters.")
+    else:
+        breakdown = pd.pivot_table(
+            f_df,
+            index=[
+                "viewer_tier", "viewer_gender", "viewer_attr",
+                "matched_tier", "matched_gender", "matched_attr",
+            ],
+            columns="action",
+            aggfunc="size",
+            fill_value=0,
+            dropna=False,
+        )
+        breakdown["total"] = breakdown.sum(axis=1)
+        breakdown = breakdown.sort_values("total", ascending=False).reset_index()
+        st.dataframe(breakdown, hide_index=True, use_container_width=True)
+
+        # --- Rejection matrices ---
+        rej = f_df[f_df["action"] == "rejected"].copy()
+        st.markdown("---")
+        st.subheader("Rejection matrices (rows = viewer, cols = matched)")
+
+        st.markdown("**Tier × tier**")
+        tier_levels = ["1", "2", "3"]
+        rej["_vt"] = rej["viewer_tier"].astype(str)
+        rej["_mt"] = rej["matched_tier"].astype(str)
+        tier_mat = (
+            pd.crosstab(rej["_vt"], rej["_mt"])
+            .reindex(index=tier_levels, columns=tier_levels, fill_value=0)
+        )
+        tier_mat.index.name = "viewer_tier"
+        tier_mat.columns.name = "matched_tier"
+        st.dataframe(tier_mat, use_container_width=True)
+
+        st.markdown("**Attractiveness × attractiveness** (rounded, 1-10)")
+        attr_levels = list(range(1, 11))
+        rej["_va"] = rej["viewer_attr"].round().astype("Int64")
+        rej["_ma"] = rej["matched_attr"].round().astype("Int64")
+        attr_mat = (
+            pd.crosstab(rej["_va"], rej["_ma"])
+            .reindex(index=attr_levels, columns=attr_levels, fill_value=0)
+        )
+        attr_mat.index.name = "viewer_attr"
+        attr_mat.columns.name = "matched_attr"
+        st.dataframe(attr_mat, use_container_width=True)
+
+        st.download_button(
+            "Download CSV",
+            data=breakdown.to_csv(index=False).encode(),
+            file_name="instant_matches_action_demographics.csv",
+            mime="text/csv",
+        )
