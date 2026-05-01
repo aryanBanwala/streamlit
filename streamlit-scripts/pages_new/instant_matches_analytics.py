@@ -157,25 +157,67 @@ elif isinstance(matches_raw, list):
             matches_per_user[uid] = matches_per_user.get(uid, 0) + 1
 
 
-# --- Action totals + viewed/unviewed (top-level) ---
-action_totals = payload.get("action_totals") or {}
-total_count_all = sum(matches_per_user.values()) or payload.get("total_matches") or 0
-total_viewed = sum(v.get("viewed", 0) for v in match_info_per_user.values())
-total_unviewed = sum(v.get("unviewed", 0) for v in match_info_per_user.values())
+# --- Per-user engagement by gender ---
+# All counts here are USERS, not matches. A user is counted at most once per column.
+def _has_any(actions: dict, action_name: str) -> bool:
+    v = (actions or {}).get(action_name)
+    if isinstance(v, list):
+        return len(v) > 0
+    if isinstance(v, (int, float)):
+        return v > 0
+    return False
 
-if action_totals or match_info_per_user:
-    st.subheader("Match actions & view stats")
 
-    a1, a2, a3, a4 = st.columns(4)
-    a1.metric("Shortlisted", action_totals.get("shortlisted", 0))
-    a2.metric("Rejected", action_totals.get("rejected", 0))
-    a3.metric("Passed", action_totals.get("passed", 0))
-    a4.metric("No action", action_totals.get("none", 0))
+def _took_any_action(actions: dict) -> bool:
+    for k, v in (actions or {}).items():
+        if k == "none":
+            continue
+        if isinstance(v, list) and v:
+            return True
+        if isinstance(v, (int, float)) and v > 0:
+            return True
+    return False
 
-    v1, v2, v3 = st.columns(3)
-    v1.metric("Total matches", total_count_all)
-    v2.metric("Viewed", total_viewed)
-    v3.metric("Unviewed", total_unviewed)
+
+eng_rows = []
+for s in states:
+    uid = s.get("user_id")
+    info = match_info_per_user.get(uid, {})
+    n = info.get("count", 0) if info else matches_per_user.get(uid, 0)
+    if n <= 0:
+        continue  # only users who actually got matches
+    actions = info.get("actions") or {}
+    eng_rows.append({
+        "gender": s.get("gender") or "unknown",
+        "got_matches": 1,
+        "viewed_any": 1 if info.get("viewed", 0) >= 1 else 0,
+        "took_any_action": 1 if _took_any_action(actions) else 0,
+        "shortlisted_any": 1 if _has_any(actions, "shortlisted") else 0,
+        "rejected_any": 1 if _has_any(actions, "rejected") else 0,
+        "passed_any": 1 if _has_any(actions, "passed") else 0,
+        "no_action": 1 if _has_any(actions, "none") else 0,
+    })
+
+if eng_rows:
+    st.subheader("Engagement by gender (per user)")
+    eng_df = pd.DataFrame(eng_rows)
+    eng_summary = (
+        eng_df.groupby("gender")
+        .agg(
+            got_matches=("got_matches", "sum"),
+            viewed_any=("viewed_any", "sum"),
+            took_any_action=("took_any_action", "sum"),
+            shortlisted_any=("shortlisted_any", "sum"),
+            rejected_any=("rejected_any", "sum"),
+            passed_any=("passed_any", "sum"),
+            no_action=("no_action", "sum"),
+        )
+        .reset_index()
+    )
+    # Total row
+    totals = {"gender": "all", **{c: int(eng_summary[c].sum()) for c in eng_summary.columns if c != "gender"}}
+    eng_summary = pd.concat([eng_summary, pd.DataFrame([totals])], ignore_index=True)
+    st.dataframe(eng_summary, hide_index=True, use_container_width=True)
 
     st.markdown("---")
 
