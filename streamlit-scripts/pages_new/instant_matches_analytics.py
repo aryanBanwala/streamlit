@@ -222,10 +222,50 @@ if eng_rows:
     st.markdown("---")
 
 
-completed_states = [
-    s for s in states if s.get("status") in ("completed", "completed_empty")
-]
+# --- Match-count distribution (completed + completed_empty users) ---
+_dist_states = [s for s in states if s.get("status") in ("completed", "completed_empty")]
+if _dist_states:
+    def _bucket(n: int) -> str:
+        return "5+" if n >= 5 else str(int(n))
 
+    bucket_order = ["0", "1", "2", "3", "4", "5+"]
+    bucket_counts = {b: 0 for b in bucket_order}
+    for s in _dist_states:
+        bucket_counts[_bucket(matches_per_user.get(s.get("user_id"), 0))] += 1
+
+    st.subheader("Matches per user")
+    overall = pd.DataFrame({"matches": bucket_order, "users": [bucket_counts[b] for b in bucket_order]})
+    st.dataframe(overall, hide_index=True, use_container_width=True)
+    st.bar_chart(overall.set_index("matches")["users"])
+    st.markdown("---")
+
+
+# --- Gender split: completed_empty + skipped ---
+def _gender_split(rows):
+    if not rows:
+        return None
+    df = pd.DataFrame([{"gender": r.get("gender") or "unknown"} for r in rows])
+    split = df.groupby("gender").size().reset_index(name="users")
+    total = pd.DataFrame([{"gender": "total", "users": int(split["users"].sum())}])
+    return pd.concat([split, total], ignore_index=True)
+
+
+st.subheader("`completed_empty` users — gender split")
+split = _gender_split([s for s in states if s.get("status") == "completed_empty"])
+if split is not None:
+    st.dataframe(split, hide_index=True, use_container_width=True)
+else:
+    st.caption("No `completed_empty` users.")
+
+st.subheader("`skipped` users — gender split")
+split = _gender_split([s for s in states if s.get("status") == "skipped"])
+if split is not None:
+    st.dataframe(split, hide_index=True, use_container_width=True)
+else:
+    st.caption("No `skipped` users.")
+
+# --- Completed users — full per-user table ---
+completed_states = [s for s in states if s.get("status") == "completed"]
 dist_rows = []
 for s in completed_states:
     uid = s.get("user_id")
@@ -247,147 +287,16 @@ for s in completed_states:
         "no_action": _action_count(actions.get("none")),
     })
 
-st.subheader(f"Completed / completed_empty — matches per user")
-
 if dist_rows:
-    dist_df = pd.DataFrame(dist_rows)
-
-    # Bucket counts: 0, 1, 2, 3, 4, 5+
-    def bucket(n: int) -> str:
-        return "5+" if n >= 5 else str(n)
-
-    dist_df["bucket"] = dist_df["match_count"].apply(bucket)
-    bucket_order = ["0", "1", "2", "3", "4", "5+"]
-
-    # Overall
-    overall = (
-        dist_df["bucket"].value_counts().reindex(bucket_order, fill_value=0)
-        .rename_axis("matches").reset_index(name="users")
-    )
-    st.markdown("**Overall**")
-    st.dataframe(overall, hide_index=True, use_container_width=True)
-    st.bar_chart(overall.set_index("matches")["users"])
-
-    # Split by gender
-    st.markdown("**By gender**")
-    gender_df = dist_df.copy()
-    gender_df["gender"] = gender_df["gender"].fillna("unknown")
-
-    # Per-gender summary: users, total matches, avg, % with 0
-    summary = (
-        gender_df.groupby("gender")
-        .agg(
-            users=("user_id", "count"),
-            total_matches=("match_count", "sum"),
-            avg_matches=("match_count", "mean"),
-            zero_match_users=("match_count", lambda x: int((x == 0).sum())),
-        )
-        .reset_index()
-    )
-    summary["avg_matches"] = summary["avg_matches"].round(2)
-    st.dataframe(summary, hide_index=True, use_container_width=True)
-
-    # Bucket pivot by gender
-    gpivot = (
-        gender_df.groupby(["bucket", "gender"]).size()
-        .unstack(fill_value=0)
-        .reindex(bucket_order, fill_value=0)
-        .reset_index()
-        .rename(columns={"bucket": "matches"})
-    )
-    st.dataframe(gpivot, hide_index=True, use_container_width=True)
-
-    # Actions + view stats by gender
-    st.markdown("**Actions & views by gender**")
-    action_summary = (
-        gender_df.groupby("gender")
-        .agg(
-            users=("user_id", "count"),
-            matches=("match_count", "sum"),
-            viewed=("viewed", "sum"),
-            unviewed=("unviewed", "sum"),
-            shortlisted=("shortlisted", "sum"),
-            rejected=("rejected", "sum"),
-            passed=("passed", "sum"),
-            no_action=("no_action", "sum"),
-        )
-        .reset_index()
-    )
-    st.dataframe(action_summary, hide_index=True, use_container_width=True)
-
-    # User-level engagement by gender (only users who actually got matches)
-    st.markdown("**User engagement by gender** (denominator = users with ≥1 match)")
-    eligible = gender_df[gender_df["match_count"] > 0]
-    engagement = (
-        eligible.groupby("gender")
-        .agg(
-            users_with_matches=("user_id", "count"),
-            viewed_atleast_one=("viewed", lambda x: int((x >= 1).sum())),
-            shortlisted_atleast_one=("shortlisted", lambda x: int((x >= 1).sum())),
-        )
-        .reset_index()
-    )
-    st.dataframe(engagement, hide_index=True, use_container_width=True)
-
-    with st.expander("Per-user table (completed only)"):
-        st.dataframe(
-            dist_df[dist_df["status"] == "completed"]
-            .drop(columns=["bucket"])
-            .sort_values("match_count", ascending=False),
-            hide_index=True, use_container_width=True,
-        )
-
-    # Detailed completed_empty users
-    empty_users = [s for s in completed_states if s.get("status") == "completed_empty"]
-    st.markdown(f"**`completed_empty` users — {len(empty_users)}**")
-    if empty_users:
-        def _ltm(v):
-            if v is True:
-                return "true"
-            if v is False:
-                return "false"
-            return "—"
-
-        empty_detail = pd.DataFrame([
-            {
-                "user_id": s.get("user_id"),
-                "gender": s.get("gender"),
-                "prof_tier": s.get("prof_tier"),
-                "attractiveness_score": s.get("attractiveness_score"),
-                "verification_status": s.get("verification_status"),
-                "looking_to_match": _ltm(s.get("looking_to_match")),
-                "deleted_at": s.get("deleted_at"),
-                "attempts": s.get("attempts"),
-            }
-            for s in empty_users
-        ])
-        st.dataframe(empty_detail, hide_index=True, use_container_width=True)
+    with st.expander(f"Completed users — per-user table ({len(dist_rows)})"):
+        completed_df = pd.DataFrame(dist_rows).sort_values("match_count", ascending=False)
+        st.dataframe(completed_df, hide_index=True, use_container_width=True)
         st.download_button(
-            "Download completed_empty CSV",
-            data=empty_detail.to_csv(index=False).encode(),
-            file_name="instant_matches_completed_empty.csv",
+            "Download completed CSV",
+            data=completed_df.to_csv(index=False).encode(),
+            file_name="instant_matches_completed.csv",
             mime="text/csv",
         )
-    else:
-        st.caption("No `completed_empty` users in this export.")
-
-    # completed_empty split by gender
-    st.markdown("**`completed_empty` by gender**")
-    empty_df = gender_df[gender_df["status"] == "completed_empty"]
-    if len(empty_df):
-        empty_summary = (
-            empty_df.groupby("gender")
-            .size()
-            .reset_index(name="completed_empty_users")
-        )
-        totals = gender_df.groupby("gender").size().reset_index(name="total_users")
-        empty_summary = empty_summary.merge(totals, on="gender", how="right").fillna(0)
-        empty_summary["completed_empty_users"] = empty_summary["completed_empty_users"].astype(int)
-        st.dataframe(empty_summary, hide_index=True, use_container_width=True)
-    else:
-        st.caption("No `completed_empty` users in this export.")
-else:
-    st.info("No completed/completed_empty users in this export.")
 
 st.markdown("---")
 
