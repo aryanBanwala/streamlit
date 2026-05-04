@@ -222,6 +222,24 @@ if eng_rows:
     st.markdown("---")
 
 
+# --- Match-count distribution (completed + completed_empty users) ---
+_dist_states = [s for s in states if s.get("status") in ("completed", "completed_empty")]
+if _dist_states:
+    def _bucket(n: int) -> str:
+        return "5+" if n >= 5 else str(int(n))
+
+    bucket_order = ["0", "1", "2", "3", "4", "5+"]
+    bucket_counts = {b: 0 for b in bucket_order}
+    for s in _dist_states:
+        bucket_counts[_bucket(matches_per_user.get(s.get("user_id"), 0))] += 1
+
+    st.subheader("Matches per user")
+    overall = pd.DataFrame({"matches": bucket_order, "users": [bucket_counts[b] for b in bucket_order]})
+    st.dataframe(overall, hide_index=True, use_container_width=True)
+    st.bar_chart(overall.set_index("matches")["users"])
+    st.markdown("---")
+
+
 # --- Gender split: completed_empty + skipped ---
 def _gender_split(rows):
     if not rows:
@@ -245,6 +263,40 @@ if split is not None:
     st.dataframe(split, hide_index=True, use_container_width=True)
 else:
     st.caption("No `skipped` users.")
+
+# --- Completed users — full per-user table ---
+completed_states = [s for s in states if s.get("status") == "completed"]
+dist_rows = []
+for s in completed_states:
+    uid = s.get("user_id")
+    n = matches_per_user.get(uid, 0)
+    info = match_info_per_user.get(uid, {})
+    actions = info.get("actions") or {}
+    dist_rows.append({
+        "user_id": uid,
+        "status": s.get("status"),
+        "gender": s.get("gender"),
+        "prof_tier": s.get("prof_tier"),
+        "attractiveness_score": s.get("attractiveness_score"),
+        "match_count": n,
+        "viewed": info.get("viewed", 0),
+        "unviewed": info.get("unviewed", 0),
+        "shortlisted": _action_count(actions.get("shortlisted")),
+        "rejected": _action_count(actions.get("rejected")),
+        "passed": _action_count(actions.get("passed")),
+        "no_action": _action_count(actions.get("none")),
+    })
+
+if dist_rows:
+    with st.expander(f"Completed users — per-user table ({len(dist_rows)})"):
+        completed_df = pd.DataFrame(dist_rows).sort_values("match_count", ascending=False)
+        st.dataframe(completed_df, hide_index=True, use_container_width=True)
+        st.download_button(
+            "Download completed CSV",
+            data=completed_df.to_csv(index=False).encode(),
+            file_name="instant_matches_completed.csv",
+            mime="text/csv",
+        )
 
 st.markdown("---")
 
