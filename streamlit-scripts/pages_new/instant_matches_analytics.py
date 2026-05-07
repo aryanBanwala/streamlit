@@ -240,32 +240,35 @@ if _dist_states:
     st.markdown("---")
 
 
-# --- Gender split: completed_empty + skipped ---
-def _gender_split(rows):
+# --- City × gender combined splits: completed_empty + skipped ---
+def _show_splits(label: str, rows):
+    st.subheader(f"`{label}` users — city × gender")
     if not rows:
-        return None
-    df = pd.DataFrame([{"gender": r.get("gender") or "unknown"} for r in rows])
-    split = df.groupby("gender").size().reset_index(name="users")
-    total = pd.DataFrame([{"gender": "total", "users": int(split["users"].sum())}])
-    return pd.concat([split, total], ignore_index=True)
+        st.caption(f"No `{label}` users.")
+        return
+    df = pd.DataFrame([
+        {"city": r.get("llm_city") or "unknown", "gender": r.get("gender") or "unknown"}
+        for r in rows
+    ])
+    pivot = pd.crosstab(df["city"], df["gender"])
+    pivot["total"] = pivot.sum(axis=1)
+    pivot = pivot.sort_values("total", ascending=False)
+
+    body = pivot.reset_index()
+    totals_row = pd.DataFrame(
+        [{c: int(pivot[c].sum()) for c in pivot.columns}]
+    )
+    st.dataframe(body, hide_index=True, use_container_width=True)
+    st.dataframe(totals_row, hide_index=True, use_container_width=True)
 
 
-st.subheader("`completed_empty` users — gender split")
-split = _gender_split([s for s in states if s.get("status") == "completed_empty"])
-if split is not None:
-    st.dataframe(split, hide_index=True, use_container_width=True)
-else:
-    st.caption("No `completed_empty` users.")
+_show_splits("completed_empty", [s for s in states if s.get("status") == "completed_empty"])
+_show_splits("skipped", [s for s in states if s.get("status") == "skipped"])
 
-st.subheader("`skipped` users — gender split")
-split = _gender_split([s for s in states if s.get("status") == "skipped"])
-if split is not None:
-    st.dataframe(split, hide_index=True, use_container_width=True)
-else:
-    st.caption("No `skipped` users.")
-
-# --- Completed users — full per-user table ---
+# --- Completed users — splits + full per-user table ---
 completed_states = [s for s in states if s.get("status") == "completed"]
+_show_splits("completed", completed_states)
+
 dist_rows = []
 for s in completed_states:
     uid = s.get("user_id")
@@ -276,6 +279,7 @@ for s in completed_states:
         "user_id": uid,
         "status": s.get("status"),
         "gender": s.get("gender"),
+        "llm_city": s.get("llm_city"),
         "prof_tier": s.get("prof_tier"),
         "attractiveness_score": s.get("attractiveness_score"),
         "match_count": n,
