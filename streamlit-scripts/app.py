@@ -102,11 +102,12 @@ elif st.session_state.dashboard == "new":
     user_reco_action_page = st.Page("pages_new/user_reco_action_viewer.py", title="User Reco Action Viewer", icon="👤")
     instant_matches_analytics_page = st.Page("pages_new/instant_matches_analytics.py", title="Instant Matches Analytics", icon="📉")
     personalise_notif_page = st.Page("pages_new/personalise_notification_viewer.py", title="Personalise Notification Viewer", icon="🔔")
+    cohort_csv_explorer_page = st.Page("pages_new/cohort_csv_explorer.py", title="Cohort CSV Explorer", icon="📂")
 
     pg = st.navigation(
         {
             "📱 New Dashboard": [new_home_page],
-            "Review": [quality_filtering_page, match_review_page, match_compare_page, wyt_checker_page],
+            "Review": [quality_filtering_page, match_review_page, match_compare_page, wyt_checker_page, cohort_csv_explorer_page],
             "Analytics": [score_explorer_page, pref_photo_search_page, user_reco_action_page, instant_matches_analytics_page, personalise_notif_page],
         }
     )
