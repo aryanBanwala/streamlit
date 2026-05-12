@@ -160,6 +160,54 @@ def _gcs_sign_urls_batch(paths):
 
 
 @st.cache_data(ttl=300, show_spinner=False)
+def fetch_recent_taglines_batch(user_ids_tuple, limit_per_user=10):
+    """Fetch last N why_you_two taglines per user from matches_display_metadata.
+
+    Returns {user_id: [tagline_str, ...]} newest-first, deduped per user.
+    Used by Display Data tab to surface anti-repetition input history.
+    """
+    user_ids = list(user_ids_tuple)
+    if not user_ids:
+        return {}
+    sql = """
+        SELECT user_id, tagline, rn
+        FROM (
+            SELECT
+                u.user_id,
+                (
+                    SELECT s->>'content'
+                    FROM jsonb_array_elements(mdm.display_data_of_user_1) s
+                    WHERE s->>'title' = 'Why You Two' OR (s->>'order')::int = -1
+                    LIMIT 1
+                ) AS tagline,
+                ROW_NUMBER() OVER (
+                    PARTITION BY u.user_id ORDER BY mdm.created_at DESC
+                ) AS rn
+            FROM (SELECT unnest(%s::uuid[]) AS user_id) u
+            JOIN matches_display_metadata mdm
+              ON mdm.user_id_1 = u.user_id OR mdm.user_id_2 = u.user_id
+        ) sub
+        WHERE rn <= %s AND tagline IS NOT NULL AND tagline <> ''
+        ORDER BY user_id, rn
+    """
+    rows = _db_query(sql, (user_ids, limit_per_user))
+    out: dict = {}
+    seen: dict = {}
+    for r in rows:
+        uid = str(r["user_id"])
+        t = (r.get("tagline") or "").strip()
+        if not t:
+            continue
+        norm = t.lower()
+        bucket_seen = seen.setdefault(uid, set())
+        if norm in bucket_seen:
+            continue
+        bucket_seen.add(norm)
+        out.setdefault(uid, []).append(t)
+    return out
+
+
+@st.cache_data(ttl=300, show_spinner=False)
 def fetch_genders_batch(user_ids_tuple):
     """Fetch only user_id + gender for all users (lightweight)."""
     user_ids = list(user_ids_tuple)
@@ -878,6 +926,9 @@ with tab_display:
         ))
         dd_profiles = fetch_profiles_batch(tuple(sorted(dd_user_ids)))
 
+        # Batched fetch — last 10 why_you_two taglines per user for this page
+        dd_recent_taglines = fetch_recent_taglines_batch(tuple(sorted(dd_user_ids)), limit_per_user=10)
+
         for idx, sample in enumerate(page_display):
             u1 = sample.get("user_1_id", "")
             u2 = sample.get("user_2_id", "")
@@ -922,6 +973,39 @@ with tab_display:
                                     key=lambda x: x.get("order", 0))
                 for section in sections_2:
                     render_display_section(section, display_signed_urls)
+
+            # Recent Why You Two history per user (gender-tagged) — anti-repetition context
+            with st.expander("Recent Why You Two history (last 10 per user)", expanded=False):
+                gender_1 = (dd_profiles.get(u1, {}) or {}).get("gender") or "unknown"
+                gender_2 = (dd_profiles.get(u2, {}) or {}).get("gender") or "unknown"
+                color_1 = "#1976d2" if gender_1 == "male" else "#e91e63" if gender_1 == "female" else "#9e9e9e"
+                color_2 = "#1976d2" if gender_2 == "male" else "#e91e63" if gender_2 == "female" else "#9e9e9e"
+
+                hist_col_1, hist_col_2 = st.columns(2)
+                with hist_col_1:
+                    st.markdown(
+                        f'<p style="font-weight:600; margin-bottom:6px;">'
+                        f'{name_1} <span style="color:{color_1};">({gender_1})</span></p>',
+                        unsafe_allow_html=True,
+                    )
+                    u1_taglines = dd_recent_taglines.get(u1, [])
+                    if not u1_taglines:
+                        st.caption("No prior taglines.")
+                    else:
+                        for i, t in enumerate(u1_taglines, 1):
+                            st.markdown(f"{i}. {t}")
+                with hist_col_2:
+                    st.markdown(
+                        f'<p style="font-weight:600; margin-bottom:6px;">'
+                        f'{name_2} <span style="color:{color_2};">({gender_2})</span></p>',
+                        unsafe_allow_html=True,
+                    )
+                    u2_taglines = dd_recent_taglines.get(u2, [])
+                    if not u2_taglines:
+                        st.caption("No prior taglines.")
+                    else:
+                        for i, t in enumerate(u2_taglines, 1):
+                            st.markdown(f"{i}. {t}")
 
             # Inline match review if available
             dd_pair_key = tuple(sorted([u1, u2]))
