@@ -26,7 +26,10 @@ load_dotenv(dotenv_path)
 
 # --- Settlement Logic ---
 
-def calculate_settlement(players: list[dict]) -> dict:
+def calculate_settlement(players: list[dict], ratio: float = 1.0) -> dict:
+    # ratio = how many coins equal ₹1 (coins are always >= rupees, so ratio >= 1)
+    ratio = ratio if ratio and ratio > 0 else 1.0
+
     summary = []
     for p in players:
         net = p["final_amount"] - p["taken_from_bank"]
@@ -34,7 +37,10 @@ def calculate_settlement(players: list[dict]) -> dict:
             "name": p["name"],
             "taken_from_bank": p["taken_from_bank"],
             "final_amount": p["final_amount"],
-            "net": round(net, 2)
+            "net": round(net, 2),
+            "net_rupees": round(net / ratio, 2),
+            "taken_rupees": round(p["taken_from_bank"] / ratio, 2),
+            "final_rupees": round(p["final_amount"] / ratio, 2)
         })
 
     total_taken = sum(p["taken_from_bank"] for p in players)
@@ -58,7 +64,8 @@ def calculate_settlement(players: list[dict]) -> dict:
             transactions.append({
                 "from": d["name"],
                 "to": c["name"],
-                "amount": settle_amount
+                "amount": settle_amount,
+                "amount_rupees": round(settle_amount / ratio, 2)
             })
 
         d["amount"] = round(d["amount"] - settle_amount, 2)
@@ -75,7 +82,8 @@ def calculate_settlement(players: list[dict]) -> dict:
         "total_final": total_final,
         "discrepancy": discrepancy,
         "has_discrepancy": abs(discrepancy) > 0.01,
-        "transactions": transactions
+        "transactions": transactions,
+        "ratio": ratio
     }
 
 
@@ -200,14 +208,27 @@ st.divider()
 # --- Player Input Section ---
 st.subheader("Players")
 
-num_players = st.number_input(
-    "Number of players",
-    min_value=2,
-    max_value=20,
-    value=len(st.session_state.poker_players),
-    step=1,
-    key="poker_num_players"
-)
+setup_cols = st.columns(2)
+
+with setup_cols[0]:
+    num_players = st.number_input(
+        "Number of players",
+        min_value=2,
+        max_value=20,
+        value=len(st.session_state.poker_players),
+        step=1,
+        key="poker_num_players"
+    )
+
+with setup_cols[1]:
+    coin_ratio = st.number_input(
+        "Coins per ₹1 (ratio)",
+        min_value=1.0,
+        value=1.0,
+        step=1.0,
+        key="poker_coin_ratio",
+        help="Kitne coins = ₹1 real. Coins always > rupees, so ratio >= 1. E.g. 10 means 10 coins = ₹1."
+    )
 
 # Adjust player list size
 current_count = len(st.session_state.poker_players)
@@ -321,7 +342,7 @@ if calculate_clicked:
                 for p in valid_players
             ]
 
-            result = calculate_settlement(clean_players)
+            result = calculate_settlement(clean_players, ratio=coin_ratio)
             st.session_state.poker_result = result
 
             # Generate commentary
@@ -408,11 +429,21 @@ if st.session_state.poker_result:
     # --- Settlement Transactions ---
     st.markdown("#### Settlements")
 
+    ratio = result.get("ratio", 1.0)
+    show_coins = ratio != 1.0
+
     if not result["transactions"]:
         st.info("No settlements needed. Everyone broke even. Kya boring game tha.")
     else:
-        st.markdown("Follow these transactions to settle all debts:")
+        if show_coins:
+            st.markdown(f"Follow these transactions to settle all debts (₹ = real money, ratio: {ratio:g} coins = ₹1):")
+        else:
+            st.markdown("Follow these transactions to settle all debts:")
         for idx, t in enumerate(result["transactions"], 1):
+            coins_note = (
+                f"<div style='color: #9e9e9e; font-size: 0.8em; text-align: right; margin-top: 2px;'>{t['amount']:,} coins</div>"
+                if show_coins else ""
+            )
             st.markdown(
                 f"""
                 <div style="background: linear-gradient(135deg, #1a1a2e, #16213e); padding: 16px 20px; border-radius: 12px; margin: 8px 0; border-left: 4px solid #ff5252; display: flex; align-items: center; justify-content: space-between;">
@@ -421,8 +452,11 @@ if st.session_state.poker_result:
                         <span style="color: #9e9e9e; margin: 0 12px;">pays</span>
                         <span style="color: #00e676; font-weight: bold; font-size: 1.1em;">{t['to']}</span>
                     </div>
-                    <div style="background: #0a0a1a; padding: 8px 16px; border-radius: 8px;">
-                        <span style="color: #ffd740; font-weight: bold; font-size: 1.3em;">₹{t['amount']:,}</span>
+                    <div style="text-align: right;">
+                        <div style="background: #0a0a1a; padding: 8px 16px; border-radius: 8px;">
+                            <span style="color: #ffd740; font-weight: bold; font-size: 1.3em;">₹{t['amount_rupees']:,}</span>
+                        </div>
+                        {coins_note}
                     </div>
                 </div>
                 """,
@@ -430,8 +464,12 @@ if st.session_state.poker_result:
             )
 
         # Verification note
-        total_settled = sum(t["amount"] for t in result["transactions"])
-        st.caption(f"Total money moving: ₹{total_settled:,} across {len(result['transactions'])} transaction(s)")
+        total_settled = sum(t["amount_rupees"] for t in result["transactions"])
+        total_coins = sum(t["amount"] for t in result["transactions"])
+        if show_coins:
+            st.caption(f"Total money moving: ₹{total_settled:,} ({total_coins:,} coins) across {len(result['transactions'])} transaction(s)")
+        else:
+            st.caption(f"Total money moving: ₹{total_settled:,} across {len(result['transactions'])} transaction(s)")
 
     # --- Commentary ---
     st.divider()
